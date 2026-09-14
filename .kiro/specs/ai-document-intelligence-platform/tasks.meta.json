@@ -19,6 +19,13 @@
         "chatSessionId": "sess_6d6e4295-80fa-4ded-86bc-43522d854c9e",
         "timestamp": 1789377530054
       }
+    ],
+    "2.1 MVP — Implement `src/config.py`: typed `Config` loading `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `LLM_PROVIDER`, `LLM_MODEL`, `TOP_K` (5), `CHUNK_SIZE_TOKENS` (700), `CHUNK_OVERLAP_TOKENS` (90), `MAX_PDF_SIZE_MB` (5), `MAX_PDF_PAGES` (50), and per-provider credential keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) from environment/`.env` with the design's default values; provide a helper that reports a missing required credential **by name only** (never its value).": [
+      {
+        "executionId": "c71cb4a4-b527-462a-a70d-76c7309bbfdf",
+        "chatSessionId": "sess_6d6e4295-80fa-4ded-86bc-43522d854c9e",
+        "timestamp": 1789388933773
+      }
     ]
   }
 }
