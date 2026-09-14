@@ -1,0 +1,24 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 MVP — Create the repository layout and dependency/ignore files: create `src/` (with `ingestion/`, `embeddings/`, `vectorstore/`, `retrieval/`, `llm/`, `query/`, `api/`, `cli/` packages + `__init__.py`), `ui/`, `tests/`, `data/`, `eval/`, `notebooks/`; add a pinned `requirements.txt` (fastapi, uvicorn, streamlit, pymupdf, chromadb, sentence-transformers, `google-generativeai` (pinned, for the Gemini MVP provider), openai, pydantic, python-dotenv, pytest, hypothesis — all version-pinned); add `.gitignore` excluding `.env`, virtualenvs, `data/` local artifacts, and Chroma persistence; add `.env.example` listing required variable names with no values, including `GEMINI_API_KEY=your_key_here` (placeholder only) alongside the other env var names. Never commit a real key — `.gitignore` already excludes `.env`.": [
+      {
+        "executionId": "bb26018b-d1cc-409b-a3a9-2e8d65b11e92",
+        "chatSessionId": "sess_6d6e4295-80fa-4ded-86bc-43522d854c9e",
+        "timestamp": 1789371301346
+      },
+      {
+        "executionId": "bb26018b-d1cc-409b-a3a9-2e8d65b11e92",
+        "chatSessionId": "sess_6d6e4295-80fa-4ded-86bc-43522d854c9e",
+        "timestamp": 1789377529822
+      }
+    ],
+    "1. MVP — Scaffold the project structure and reproducible environment": [
+      {
+        "executionId": "bb26018b-d1cc-409b-a3a9-2e8d65b11e92",
+        "chatSessionId": "sess_6d6e4295-80fa-4ded-86bc-43522d854c9e",
+        "timestamp": 1789377530054
+      }
+    ]
+  }
+}
