@@ -151,35 +151,180 @@ class VectorStore:
             return
 
         ids: list[str] = [f"{document_id}:{i}" for i in range(len(chunks))]
-        metadatas: list[dict[str, object]] = []
-        for chunk in chunks:
-            # section None -> "" sentinel (Chroma metadata cannot be None);
-            # mapped back to None on read.
-            section_value = (
-                chunk.section
-                if chunk.section is not None
-                else _SECTION_NONE_SENTINEL
+        metadatas: list[dict[str, object]] = [
+            self._build_chunk_metadata(
+                chunk,
+                document_id=document_id,
+                document_hash=document_hash,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+                page_count=page_count,
+                ingested_at_iso=ingested_at_iso,
             )
-            metadatas.append(
-                {
-                    "document_name": chunk.document_name,
-                    "page_number": chunk.page_number,
-                    "section": section_value,
-                    "chunk_text": chunk.chunk_text,
-                    "embedding_provider": embedding_provider,
-                    "embedding_model": embedding_model,
-                    "document_id": document_id,
-                    "document_hash": document_hash,
-                    # Document-level fields needed to rebuild DocumentRecord.
-                    "page_count": page_count,
-                    "ingested_at": ingested_at_iso,
-                }
-            )
+            for chunk in chunks
+        ]
 
         self._collection.add(
             ids=ids,
             embeddings=embeddings,
             metadatas=metadatas,
+        )
+
+    def get_document_chunks(self, document_id: str) -> list[Chunk]:
+        """Return all stored chunks for ``document_id`` in chunk-index order.
+
+        Pure read: this method only reads from the collection and never mutates
+        it. It is keyed strictly off ``document_id`` (the stable addressing
+        handle) and never off ``document_hash``.
+
+        Ordering: Chroma does not guarantee the order in which ``get`` returns
+        rows, so the chunks are sorted by the integer index parsed from each
+        record id. Record ids are the composite ``f"{document_id}:{i}"`` written
+        by :meth:`add_chunks`, so sorting on that trailing index restores the
+        original ingestion order deterministically.
+
+        Each chunk is rebuilt via :meth:`_chunk_from_metadata`, so the
+        ``section`` sentinel (``""`` <-> ``None``), ``page_number`` (int),
+        ``chunk_text`` and ``document_name`` all round-trip exactly as stored.
+
+        Args:
+            document_id: The stable UUID the document is addressed by.
+
+        Returns:
+            The document's chunks in original chunk-index order, or ``[]`` when
+            no chunk carries this ``document_id`` (an unknown ``document_id`` is
+            NOT an error here; the service layer decides whether that is a
+            "document not found" condition).
+        """
+        stored = self._collection.get(
+            where={"document_id": document_id},
+            include=["metadatas"],
+        )
+        ids = stored.get("ids") or []
+        metadatas = stored.get("metadatas") or []
+
+        # Pair each metadata with the integer index parsed from its record id
+        # (``f"{document_id}:{i}"``) and sort so order matches ingestion order.
+        pairs = list(zip(ids, metadatas))
+        pairs.sort(key=lambda pair: self._parse_chunk_index(pair[0]))
+        return [self._chunk_from_metadata(metadata) for _id, metadata in pairs]
+
+    def replace_document_embeddings(
+        self,
+        document_id: str,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+        embedding_provider: str,
+        embedding_model: str,
+    ) -> DocumentRecord:
+        """Replace one document's vectors + provenance, scoped to ``document_id``.
+
+        This performs a **document-scoped** delete-then-add that swaps out the
+        stored vectors (and their provenance) for a single ``document_id`` while
+        preserving everything else about the document. It is keyed strictly off
+        ``document_id`` and never off ``document_hash``.
+
+        What is preserved (unchanged): ``document_hash``, ``page_count`` and the
+        ORIGINAL ``ingested_at`` are recovered from the existing stored metadata;
+        each chunk's ``chunk_text``, ``page_number``, ``section`` and
+        ``document_name`` come from the supplied ``chunks`` (which are the same
+        chunks the caller loaded via :meth:`get_document_chunks`). What is
+        updated: ONLY the stored vectors and the ``embedding_provider`` /
+        ``embedding_model`` provenance (set to the passed-in active values).
+
+        Embeddings are **supplied by the caller** — this method never computes a
+        vector. The caller (the ingestion service) generates every new embedding
+        successfully *before* calling this method, so an embedding-generation
+        failure happens before any store mutation and therefore cannot delete or
+        partially overwrite the document.
+
+        Atomicity note (honest): Chroma offers no cross-operation transaction, so
+        the ``delete`` and the ``add`` are two separate operations with a brief
+        non-atomic window between them. This is NOT transactional/atomic. The key
+        safety guarantee is only that embedding generation (the fallible step)
+        has already completed before either operation runs.
+
+        Args:
+            document_id: The stable UUID of the document to replace.
+            chunks: The document's chunks (same ones loaded for this document).
+            embeddings: One new vector per chunk, in the same order as ``chunks``.
+            embedding_provider: The active provider name (new provenance).
+            embedding_model: The active model name (new provenance).
+
+        Returns:
+            The updated :class:`~src.models.DocumentRecord` for this document:
+            preserved ``document_hash`` / ``page_count`` / ``ingested_at``,
+            ``chunk_count == len(chunks)``, and the new active
+            ``embedding_provider`` / ``embedding_model``.
+
+        Raises:
+            ValueError: If ``len(chunks) != len(embeddings)`` (D7), or if no
+                existing metadata is found for ``document_id`` (the service
+                guarantees existence before calling this).
+        """
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                "chunks and embeddings must have the same length"
+            )
+
+        # Recover the document-level metadata to preserve from any one existing
+        # chunk (document_hash, page_count, original ingested_at). Read BEFORE
+        # deleting anything.
+        existing = self._collection.get(
+            where={"document_id": document_id},
+            include=["metadatas"],
+            limit=1,
+        )
+        existing_metadatas = existing.get("metadatas") or []
+        if not existing_metadatas:
+            raise ValueError("unknown document_id")
+        existing_metadata = existing_metadatas[0]
+
+        preserved_hash = str(existing_metadata["document_hash"])
+        preserved_page_count = int(existing_metadata["page_count"])
+        preserved_ingested_at_iso = str(existing_metadata["ingested_at"])
+
+        document_name = (
+            chunks[0].document_name
+            if chunks
+            else str(existing_metadata["document_name"])
+        )
+
+        # Build the new ids/metadatas exactly like add_chunks, but with the
+        # preserved document-level fields and the UPDATED provenance.
+        ids = [f"{document_id}:{i}" for i in range(len(chunks))]
+        metadatas = [
+            self._build_chunk_metadata(
+                chunk,
+                document_id=document_id,
+                document_hash=preserved_hash,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+                page_count=preserved_page_count,
+                ingested_at_iso=preserved_ingested_at_iso,
+            )
+            for chunk in chunks
+        ]
+
+        # Scoped delete-then-add (non-atomic window; see docstring). Embeddings
+        # were already computed by the caller, so no fallible work happens here.
+        self._collection.delete(where={"document_id": document_id})
+        if chunks:
+            self._collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                metadatas=metadatas,
+            )
+
+        return DocumentRecord(
+            document_id=document_id,
+            document_name=document_name,
+            document_hash=preserved_hash,
+            page_count=preserved_page_count,
+            chunk_count=len(chunks),
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            ingested_at=datetime.fromisoformat(preserved_ingested_at_iso),
         )
 
     def query(
@@ -310,6 +455,75 @@ class VectorStore:
             The chunk count across all documents (``0`` for an empty store).
         """
         return int(self._collection.count())
+
+    @staticmethod
+    def _build_chunk_metadata(
+        chunk: Chunk,
+        *,
+        document_id: str,
+        document_hash: str,
+        embedding_provider: str,
+        embedding_model: str,
+        page_count: int,
+        ingested_at_iso: str,
+    ) -> dict[str, object]:
+        """Build the Chroma metadata dict for one chunk.
+
+        Shared by :meth:`add_chunks` and :meth:`replace_document_embeddings` so
+        both write byte-identical metadata layouts. Applies the ``section``
+        sentinel mapping (``None`` -> ``""``) on write.
+
+        Args:
+            chunk: The chunk whose per-chunk fields are stored.
+            document_id: Stable UUID the document is addressed by.
+            document_hash: SHA-256 of the file bytes (dedupe key).
+            embedding_provider: Provenance provider for these embeddings.
+            embedding_model: Provenance model for these embeddings.
+            page_count: Document-level page count.
+            ingested_at_iso: Document-level ingestion timestamp (ISO-8601).
+
+        Returns:
+            The metadata dict ready to hand to Chroma's ``add``.
+        """
+        section_value = (
+            chunk.section
+            if chunk.section is not None
+            else _SECTION_NONE_SENTINEL
+        )
+        return {
+            "document_name": chunk.document_name,
+            "page_number": chunk.page_number,
+            "section": section_value,
+            "chunk_text": chunk.chunk_text,
+            "embedding_provider": embedding_provider,
+            "embedding_model": embedding_model,
+            "document_id": document_id,
+            "document_hash": document_hash,
+            # Document-level fields needed to rebuild DocumentRecord.
+            "page_count": page_count,
+            "ingested_at": ingested_at_iso,
+        }
+
+    @staticmethod
+    def _parse_chunk_index(record_id: str) -> int:
+        """Parse the trailing integer index from a composite record id.
+
+        Record ids are the composite ``f"{document_id}:{i}"``. The index is the
+        substring after the final ``":"``. ``document_id`` is a UUID (no colon),
+        so splitting on the last colon isolates the index robustly.
+
+        Args:
+            record_id: A composite Chroma record id.
+
+        Returns:
+            The parsed integer chunk index, or ``0`` if it cannot be parsed
+            (defensive; keeps ordering deterministic rather than raising).
+        """
+        suffix = record_id.rsplit(":", 1)[-1]
+        try:
+            return int(suffix)
+        except ValueError:
+            return 0
 
     @staticmethod
     def _chunk_from_metadata(metadata: dict[str, object]) -> Chunk:

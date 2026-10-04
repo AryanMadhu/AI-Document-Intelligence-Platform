@@ -49,7 +49,7 @@ from src.embeddings.base import (
 )
 from src.ingestion.chunking import Chunking_Module
 from src.ingestion.pdf_parser import PDF_Parser, PDFParseError  # noqa: F401 (re-export via package)
-from src.models import UploadResponse
+from src.models import ReembedResponse, UploadResponse
 from src.vectorstore import VectorStore
 
 
@@ -141,6 +141,29 @@ class EmptyDocumentError(IngestionError):
         super().__init__(
             f"File '{file}' contains no extractable text; no chunks were found."
         )
+
+
+class DocumentNotFoundError(IngestionError):
+    """Raised when re-embedding is requested for an unknown ``document_id`` (R15.7).
+
+    Raised by :meth:`Ingestion_Service.reembed_document` when the store holds no
+    chunks for the requested ``document_id``. The store is left completely
+    unchanged (nothing is read-modified, nothing is deleted). The message names
+    the id — a ``document_id`` is an addressing handle, not a secret — but
+    carries no other payload.
+
+    Attributes:
+        document_id: The ``document_id`` that had no stored chunks.
+    """
+
+    def __init__(self, document_id: str) -> None:
+        """Initialize with the unknown document id.
+
+        Args:
+            document_id: The ``document_id`` that had no stored chunks.
+        """
+        self.document_id = document_id
+        super().__init__(f"No document found with id '{document_id}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +345,82 @@ class Ingestion_Service:
             page_count=page_count,
             chunk_count=len(chunks),
             message="Ingested successfully.",
+        )
+
+    def reembed_document(self, document_id: str) -> ReembedResponse:
+        """Re-embed a stored document with the active provider (design: Re-embed flow).
+
+        Orchestration order (design "Re-embedding" steps 1-5), chosen so a
+        failure never corrupts the stored document:
+
+        1. **Load chunks** for ``document_id`` via
+           :meth:`VectorStore.get_document_chunks`. If none exist, raise
+           :class:`DocumentNotFoundError`; the store is left unchanged.
+        2. **Embed all chunk texts** with the *active* provider. This happens
+           *before* any store mutation, so if embedding fails nothing is deleted
+           and the document stays on its prior embedding space (R5.3, R16.3).
+        3. **Replace** the document's vectors + provenance via
+           :meth:`VectorStore.replace_document_embeddings`, preserving
+           ``document_hash`` / ``page_count`` / ``ingested_at`` / chunk text /
+           pages / sections and updating only the vectors and provenance.
+        4. Provenance now matches the active provider/model, so the retrieval
+           compatibility gate (Task 10) re-admits the document automatically —
+           no extra work is needed here.
+        5. **Return** a :class:`~src.models.ReembedResponse` echoing the id and
+           the new provenance.
+
+        Args:
+            document_id: The stable id of the stored document to re-embed.
+
+        Returns:
+            A :class:`~src.models.ReembedResponse` with ``status='reembedded'``,
+            the updated ``embedding_provider`` / ``embedding_model`` (the active
+            provider/model), and the re-embedded ``chunk_count``.
+
+        Raises:
+            DocumentNotFoundError: If no stored chunks carry ``document_id``;
+                the store is left unchanged.
+            EmbeddingError: If embedding fails; nothing is deleted and the
+                document remains on its prior embedding space (re-raised naming
+                the document id via chaining, value-free).
+        """
+        # 1. Load the document's chunks. No chunks => unknown id (store intact).
+        chunks = self._vector_store.get_document_chunks(document_id)
+        if not chunks:
+            raise DocumentNotFoundError(document_id)
+
+        # 2. Embed ALL chunk texts with the ACTIVE provider, BEFORE any store
+        #    mutation. A failure here leaves the document untouched (atomicity).
+        try:
+            embeddings = self._embedding_provider.embed_texts(
+                [chunk.chunk_text for chunk in chunks]
+            )
+        except EmbeddingError as exc:
+            # Re-raise naming the document for identification (R5.3/R16.3);
+            # chained and value-free. Nothing was deleted or stored.
+            raise EmbeddingError(
+                f"Embedding failed for document '{document_id}'; "
+                "the document was left unchanged."
+            ) from exc
+
+        # 3. Scoped replace: swap vectors + provenance, preserve everything else.
+        record = self._vector_store.replace_document_embeddings(
+            document_id,
+            chunks,
+            embeddings,
+            self._embedding_provider.provider_name,
+            self._embedding_provider.model_name,
+        )
+
+        # 4. (Provenance now matches active -> Task 10 re-admits automatically.)
+
+        # 5. RETURN.
+        return ReembedResponse(
+            document_id=document_id,
+            status="reembedded",
+            embedding_provider=record.embedding_provider,
+            embedding_model=record.embedding_model,
+            chunk_count=record.chunk_count,
         )
 
     def _find_existing_record(self, document_hash: str):

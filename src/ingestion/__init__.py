@@ -9,6 +9,7 @@ does not pull in ``transformers``/``torch`` at package import time.
 from src.ingestion.chunking import Chunking_Module, ChunkingError
 from src.ingestion.pdf_parser import PageText, PDF_Parser, PDFParseError
 from src.ingestion.service import (
+    DocumentNotFoundError,
     EmptyDocumentError,
     FileTooLargeError,
     Ingestion_Service,
@@ -29,4 +30,5 @@ __all__ = [
     "FileTooLargeError",
     "TooManyPagesError",
     "EmptyDocumentError",
+    "DocumentNotFoundError",
 ]
