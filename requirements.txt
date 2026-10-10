@@ -10,3 +10,4 @@ pydantic==2.12.5
 python-dotenv==1.0.1
 pytest==8.3.4
 hypothesis==6.122.3
+python-multipart==0.0.32

@@ -147,13 +147,24 @@ Sub-tasks marked with `*` are optional (test/eval-only) and can be skipped for a
     - References R5.3, R15.7, R16.3; Design: Testing Strategy (re-embedding flow)
 
 - [ ] 14. MVP — FastAPI backend and error-to-HTTP mapping
-  - [ ] 14.1 MVP — Implement `src/api/app.py` endpoints wired to the services: `POST /documents/upload` (Ingestion_Service; success/duplicate/invalid/oversized/too-many-pages; `UploadResponse` includes the `document_id`), `GET /documents` (list; empty list when none), `POST /query` (validate non-empty question → `{answer, citations}`), `POST /documents/{document_id}/reembed` where the `{document_id}` path param is the stable `document_id` → `ReembedResponse` echoing that `document_id`.
+  - [x] 14.1 MVP — Implement `src/api/app.py` endpoints wired to the services: `POST /documents/upload` (Ingestion_Service; success/duplicate/invalid/oversized/too-many-pages; `UploadResponse` includes the `document_id`), `GET /documents` (list; empty list when none), `POST /query` (validate non-empty question → `{answer, citations}`), `POST /documents/{document_id}/reembed` where the `{document_id}` path param is the stable `document_id` → `ReembedResponse` echoing that `document_id`.
     - References R10.1, R10.2, R10.3, R11.1, R11.2, R11.3, R12.1, R12.2, R15.7; Design: API_Backend, reembed contract (document_id path param)
-  - [ ] 14.2 MVP — Implement the full error-to-HTTP mapping from the Error Handling table: `EMPTY_QUESTION` 400, `INVALID_PDF` 400, `FILE_TOO_LARGE` 413, `TOO_MANY_PAGES` 413, duplicate 200, `EMBEDDING_FAILED` 502, `LLM_FAILED` 502, `MISSING_CREDENTIAL` 500, `REEMBEDDING_REQUIRED` 409, `DOCUMENT_NOT_FOUND` 404 — all returning credential-safe `ErrorResponse` bodies.
+  - [x] 14.2 MVP — Implement the full error-to-HTTP mapping from the Error Handling table: `EMPTY_QUESTION` 400, `INVALID_PDF` 400, `FILE_TOO_LARGE` 413, `TOO_MANY_PAGES` 413, duplicate 200, `EMBEDDING_FAILED` 502, `LLM_FAILED` 502, `MISSING_CREDENTIAL` 500, `REEMBEDDING_REQUIRED` 409, `DOCUMENT_NOT_FOUND` 404 — all returning credential-safe `ErrorResponse` bodies.
     - References R10.3, R10.4, R11.3, R11.5, R15.6, R15.7, R16.2, R16.3, R16.4; Design: Error Handling table
-  - [ ]* 14.3 MVP — Write the end-to-end integration test.
+  - [x]* 14.3 MVP — Write the end-to-end integration test.
     - Ingest a small fixture PDF with stub providers → `POST /query` → assert `{answer, citations}` where every citation traces to an ingested chunk.
     - References R18.3; Design: Testing Strategy (integration test)
+    - **Task 14 implementation notes:**
+      - **Dependency added**: `python-multipart==0.0.32` (required by FastAPI/Starlette to parse the `multipart/form-data` body of `POST /documents/upload`).
+      - **D1** — a successful (or duplicate) upload returns HTTP 200.
+      - **D2** — `TOO_MANY_PAGES` → 413; `EMPTY_DOCUMENT` → 422.
+      - **D3** — `QueryRequest.top_k` is accepted but intentionally unused; `/query` calls `service.answer(question)` with the question only.
+      - **D4** — a custom `RequestValidationError` handler returns the project's `ErrorResponse` envelope (422, `VALIDATION_ERROR`) with a fixed `"The request was invalid."` detail; the raw pydantic error tree / request input is never serialized into the body.
+      - **D5** — a *missing* `question` field is a 422 validation error; an *empty/whitespace* question value is owned by `Query_Service` → 400 `EMPTY_QUESTION`.
+      - **D7** — lazy, cached DI via `functools.lru_cache` `_get_*` builders; importing `src.api.app` and calling `create_app()` constructs nothing heavy (no provider/store/model/network/Chroma dir). Verified by two import-safety tests (subprocess + in-process) and an autouse test guard that fails any test in which a real `_get_*` builder runs.
+      - **D10** — no `/retrieve` HTTP endpoint.
+      - **Upload size guard** — a *before-read* size guard runs in a module-level `_handle_upload` helper: when `UploadFile.size` is known it rejects over-limit uploads without reading the body; when `size` is `None` (missing/unreliable `Content-Length`) it does a **bounded** read of at most `max_bytes + 1` bytes and rejects if over — never pulling an unbounded body into memory. Task 9's `len(file_bytes)` check remains the authoritative backstop.
+      - **MISSING_CREDENTIAL** — the handler is registered and returns a name-only (value-free) 500, but is **currently unreachable in the MVP**: a missing `GEMINI_API_KEY` is caught in the Gemini provider and re-raised as `LLMError` → 502 `LLM_FAILED`, and the MVP sentence-transformers embedding provider needs no credential. The handler is retained for a future credential-propagating provider.
 
 - [ ] 15. MVP — Streamlit UI
   - [ ] 15.1 MVP — Implement `ui/app.py`: PDF upload control, chat-style question input, display answer text with citations as expandable cards showing `document`/`page`/`excerpt`, and an error message on answer-generation failure. Stateless per query (no conversation memory).
