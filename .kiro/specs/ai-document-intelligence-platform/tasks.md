@@ -16,32 +16,32 @@ Sub-tasks marked with `*` are optional (test/eval-only) and can be skipped for a
   - [x] 1.1 MVP — Create the repository layout and dependency/ignore files: create `src/` (with `ingestion/`, `embeddings/`, `vectorstore/`, `retrieval/`, `llm/`, `query/`, `api/`, `cli/` packages + `__init__.py`), `ui/`, `tests/`, `data/`, `eval/`, `notebooks/`; add a pinned `requirements.txt` (fastapi, uvicorn, streamlit, pymupdf, chromadb, sentence-transformers, `google-generativeai` (pinned, for the Gemini MVP provider), openai, pydantic, python-dotenv, pytest, hypothesis — all version-pinned); add `.gitignore` excluding `.env`, virtualenvs, `data/` local artifacts, and Chroma persistence; add `.env.example` listing required variable names with no values, including `GEMINI_API_KEY=your_key_here` (placeholder only) alongside the other env var names. Never commit a real key — `.gitignore` already excludes `.env`.
     - References R1.1, R1.2, R1.4, R1.5, R17.3, R15.2, R16.4; Design: Repository layout, Configuration approach, Secret management
 
-- [ ] 2. MVP — Configuration module
-  - [ ] 2.1 MVP — Implement `src/config.py`: typed `Config` loading `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `LLM_PROVIDER`, `LLM_MODEL`, `TOP_K` (5), `CHUNK_SIZE_TOKENS` (700), `CHUNK_OVERLAP_TOKENS` (90), `MAX_PDF_SIZE_MB` (5), `MAX_PDF_PAGES` (50), and per-provider credential keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) from environment/`.env` with the design's default values; provide a helper that reports a missing required credential **by name only** (never its value).
+- [x] 2. MVP — Configuration module
+  - [x] 2.1 MVP — Implement `src/config.py`: typed `Config` loading `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `LLM_PROVIDER`, `LLM_MODEL`, `TOP_K` (5), `CHUNK_SIZE_TOKENS` (700), `CHUNK_OVERLAP_TOKENS` (90), `MAX_PDF_SIZE_MB` (5), `MAX_PDF_PAGES` (50), and per-provider credential keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) from environment/`.env` with the design's default values; provide a helper that reports a missing required credential **by name only** (never its value).
     - References R5.4, R6.3, R8.5, R11.4, R16.4, R17.3; Design: Config, Finalized configuration defaults, Secret management
-  - [ ]* 2.2 MVP — Write unit tests for `Config`: defaults resolve to the documented values; overrides from env are applied; missing-credential lookup raises a named, value-free error.
+  - [x]* 2.2 MVP — Write unit tests for `Config`: defaults resolve to the documented values; overrides from env are applied; missing-credential lookup raises a named, value-free error.
     - References R16.4; Design: Testing Strategy (provider factories / missing credential)
 
-- [ ] 3. MVP — Core data models
-  - [ ] 3.1 MVP — Implement `src/models.py`: `Chunk` (dataclass), `DocumentRecord` (dataclass w/ a stable `document_id` (UUID string) that is distinct from `document_hash`, plus `document_hash`, provenance `embedding_provider`/`embedding_model`, counts, `ingested_at`), `RetrievedChunk` (dataclass), `Citation` (Pydantic), API models `QueryRequest`, `QueryResponse`, `UploadResponse` (carries `document_id`), `DocumentListResponse`, `ReembedResponse` (echoes `document_id`), `ErrorResponse` (Pydantic), and `EvalQuestion` (dataclass). Include type hints and docstrings. Keep the distinction explicit: `document_id` = stable UUID used to ADDRESS a document; `document_hash` = SHA-256 used ONLY for duplicate detection.
+- [x] 3. MVP — Core data models
+  - [x] 3.1 MVP — Implement `src/models.py`: `Chunk` (dataclass), `DocumentRecord` (dataclass w/ a stable `document_id` (UUID string) that is distinct from `document_hash`, plus `document_hash`, provenance `embedding_provider`/`embedding_model`, counts, `ingested_at`), `RetrievedChunk` (dataclass), `Citation` (Pydantic), API models `QueryRequest`, `QueryResponse`, `UploadResponse` (carries `document_id`), `DocumentListResponse`, `ReembedResponse` (echoes `document_id`), `ErrorResponse` (Pydantic), and `EvalQuestion` (dataclass). Include type hints and docstrings. Keep the distinction explicit: `document_id` = stable UUID used to ADDRESS a document; `document_hash` = SHA-256 used ONLY for duplicate detection.
     - References R4.3, R5.2, R5.5, R9.2, R10, R11, R12, R15.7, R2.3, R17.1, R17.2; Design: Data Models (DocumentRecord — document_id vs document_hash)
 
-- [ ] 4. MVP — Embedding provider interface, factory, and default implementation
-  - [ ] 4.1 MVP — Implement `src/embeddings/base.py`: `EmbeddingProvider` ABC (`provider_name`, `model_name`, `dimension`, `embed_texts`, `embed_query`) plus an `EmbeddingError`, and the `build_embedding_provider(config)` factory that maps the config string to a concrete class and raises a named, value-free error on missing credentials.
+- [x] 4. MVP — Embedding provider interface, factory, and default implementation
+  - [x] 4.1 MVP — Implement `src/embeddings/base.py`: `EmbeddingProvider` ABC (`provider_name`, `model_name`, `dimension`, `embed_texts`, `embed_query`) plus an `EmbeddingError`, and the `build_embedding_provider(config)` factory that maps the config string to a concrete class and raises a named, value-free error on missing credentials.
     - References R5.1, R5.4, R15.1, R15.3, R16.4; Design: EmbeddingProvider interface, Provider selection
-  - [ ] 4.2 MVP — Implement `src/embeddings/sentence_transformers_provider.py`: `SentenceTransformersEmbeddingProvider` (`all-MiniLM-L6-v2`, 384-dim) satisfying the ABC and exposing provider/model identity for provenance.
+  - [x] 4.2 MVP — Implement `src/embeddings/sentence_transformers_provider.py`: `SentenceTransformersEmbeddingProvider` (`all-MiniLM-L6-v2`, 384-dim) satisfying the ABC and exposing provider/model identity for provenance.
     - References R5.1, R15.1; Design: EmbeddingProvider (SentenceTransformers impl, MVP default)
-  - [ ]* 4.3 MVP — Write unit tests for the embedding factory: each config value maps to the expected concrete provider; missing credential raises a named, value-free error.
+  - [x]* 4.3 MVP — Write unit tests for the embedding factory: each config value maps to the expected concrete provider; missing credential raises a named, value-free error.
     - References R5.4, R15.3, R16.4; Design: Testing Strategy (provider factories)
   - [ ]* 4.4 Stretch — Implement `src/embeddings/openai_provider.py`: `OpenAIEmbeddingProvider` (`text-embedding-3-small`, 1536-dim) behind the same interface; register it in the factory.
     - References R5.1, R15.1, R15.3; Design: MVP vs Stretch Scope (OpenAIEmbeddingProvider — Stretch)
 
-- [ ] 5. MVP — LLM provider interface, factory, and default implementation
-  - [ ] 5.1 MVP — Implement `src/llm/base.py`: `LLMProvider` ABC (`provider_name`, `model_name`, `generate`) plus an `LLMError`, and the `build_llm_provider(config)` factory that maps `gemini` → `GeminiLLMProvider` (the MVP default), and `openai` → `OpenAILLMProvider`, `anthropic` → `AnthropicLLMProvider`, `ollama` → `OllamaLLMProvider` (their Stretch impls) behind the same interface; a missing `GEMINI_API_KEY` (when `gemini` is selected) raises a named, value-free error.
+- [x] 5. MVP — LLM provider interface, factory, and default implementation
+  - [x] 5.1 MVP — Implement `src/llm/base.py`: `LLMProvider` ABC (`provider_name`, `model_name`, `generate`) plus an `LLMError`, and the `build_llm_provider(config)` factory that maps `gemini` → `GeminiLLMProvider` (the MVP default), and `openai` → `OpenAILLMProvider`, `anthropic` → `AnthropicLLMProvider`, `ollama` → `OllamaLLMProvider` (their Stretch impls) behind the same interface; a missing `GEMINI_API_KEY` (when `gemini` is selected) raises a named, value-free error.
     - References R8.5, R15.2, R15.4, R16.4; Design: LLMProvider interface, Provider selection
-  - [ ] 5.2 MVP — Implement `src/llm/gemini_provider.py`: `GeminiLLMProvider` (Google Gemini, model `gemini-flash-latest`) satisfying the ABC; read `GEMINI_API_KEY` from Config/env only (never hard-coded); raise `LLMError` on provider failure; no domain-specific logic. Depends on the pinned `google-generativeai` client.
+  - [x] 5.2 MVP — Implement `src/llm/gemini_provider.py`: `GeminiLLMProvider` (Google Gemini, model `gemini-flash-latest`) satisfying the ABC; read `GEMINI_API_KEY` from Config/env only (never hard-coded); raise `LLMError` on provider failure; no domain-specific logic. Depends on the pinned `google-generativeai` client.
     - References R8.5, R15.2, R15.5; Design: LLMProvider (Gemini impl, MVP default)
-  - [ ]* 5.3 MVP — Write unit tests for the LLM factory: each config value maps to the expected concrete provider (assert `gemini` maps to `GeminiLLMProvider`); a missing `GEMINI_API_KEY` raises a named, value-free error.
+  - [x]* 5.3 MVP — Write unit tests for the LLM factory: each config value maps to the expected concrete provider (assert `gemini` maps to `GeminiLLMProvider`); a missing `GEMINI_API_KEY` raises a named, value-free error.
     - References R8.5, R15.4, R16.4; Design: Testing Strategy (provider factories)
   - [ ]* 5.4 Stretch — Implement `src/llm/openai_provider.py`: `OpenAILLMProvider` (`gpt-4o-mini`) satisfying the ABC; raise `LLMError` on provider failure. No domain-specific logic. (Stretch/Future; interface stays MVP.)
     - References R8.5, R15.2, R15.5; Design: MVP vs Stretch Scope (OpenAILLMProvider — Stretch)
@@ -50,103 +50,103 @@ Sub-tasks marked with `*` are optional (test/eval-only) and can be skipped for a
   - [ ]* 5.6 Stretch — Implement `src/llm/ollama_provider.py` (`OllamaLLMProvider`, local dev only) behind the same interface and register it in the factory.
     - References R15.2, R15.4; Design: MVP vs Stretch Scope (OllamaLLMProvider — Stretch)
 
-- [ ] 6. MVP — Vector store wrapper (Chroma)
-  - [ ] 6.1 MVP — Implement `src/vectorstore/chroma_store.py`: `VectorStore` wrapping a persistent Chroma client — `add_chunks(document_id, chunks, embeddings)` (persists chunks + vectors under the owning `document_id`), `query(query_embedding, top_k)` returning `RetrievedChunk` ranked by similarity, `list_documents`, `document_exists(document_hash)` (dedupe check — stays keyed on the SHA-256 `document_hash`), `count`; persist chunk metadata `{document_name, page_number, section, chunk_text}` plus provenance `{embedding_provider, embedding_model}`, the owning `document_id`, and `document_hash`, so chunks are addressable by `document_id`. Keep Chroma types from leaking out.
+- [x] 6. MVP — Vector store wrapper (Chroma)
+  - [x] 6.1 MVP — Implement `src/vectorstore/chroma_store.py`: `VectorStore` wrapping a persistent Chroma client — `add_chunks(document_id, chunks, embeddings)` (persists chunks + vectors under the owning `document_id`), `query(query_embedding, top_k)` returning `RetrievedChunk` ranked by similarity, `list_documents`, `document_exists(document_hash)` (dedupe check — stays keyed on the SHA-256 `document_hash`), `count`; persist chunk metadata `{document_name, page_number, section, chunk_text}` plus provenance `{embedding_provider, embedding_model}`, the owning `document_id`, and `document_hash`, so chunks are addressable by `document_id`. Keep Chroma types from leaking out.
     - References R5.2, R6.2, R6.4, R6.5, R11.6, R12.1, R12.2; Design: Vector_Store wrapper (keying convention — addressing by document_id, dedupe by document_hash)
-  - [ ]* 6.2 MVP — Write property test for storage round-trip.
+  - [x]* 6.2 MVP — Write property test for storage round-trip.
     - **Property 4: Storage and retrieval preserve chunk metadata (round trip)**
     - **Validates: Requirements 5.2, 6.4**
     - Hypothesis ≥100 iterations, stub embeddings; assert stored `{document_name, page_number, section, chunk_text}` is returned unchanged and each stored chunk remains addressable by its owning `document_id`.
 
-- [ ] 7. MVP — PDF parsing with page preservation
-  - [ ] 7.1 MVP — Implement `src/ingestion/pdf_parser.py`: `PDF_Parser` (PyMuPDF) returning per-page `PageText{page_number, text}`; record empty-text pages and continue; raise `PDFParseError(file, reason)` on non-PDF/corrupt input.
+- [x] 7. MVP — PDF parsing with page preservation
+  - [x] 7.1 MVP — Implement `src/ingestion/pdf_parser.py`: `PDF_Parser` (PyMuPDF) returning per-page `PageText{page_number, text}`; record empty-text pages and continue; raise `PDFParseError(file, reason)` on non-PDF/corrupt input.
     - References R3.1, R3.2, R3.3, R3.4; Design: PDF_Parser
-  - [ ]* 7.2 MVP — Write unit tests for the parser: empty-text pages are recorded and processing continues (R3.4); a corrupt file raises `PDFParseError` with file + reason (R3.3).
+  - [x]* 7.2 MVP — Write unit tests for the parser: empty-text pages are recorded and processing continues (R3.4); a corrupt file raises `PDFParseError` with file + reason (R3.3).
     - References R3.3, R3.4; Design: Testing Strategy (parser edge cases)
 
-- [ ] 8. MVP — Chunking module
-  - [ ] 8.1 MVP — Implement `src/ingestion/chunking.py`: `Chunking_Module` token-based splitter (`CHUNK_SIZE_TOKENS=700`, `CHUNK_OVERLAP_TOKENS=90`) that preserves page boundaries (each chunk maps to one page) and attaches `{document_name, page_number, section, chunk_text}`, with `section=None` when unavailable.
+- [x] 8. MVP — Chunking module
+  - [x] 8.1 MVP — Implement `src/ingestion/chunking.py`: `Chunking_Module` token-based splitter (`CHUNK_SIZE_TOKENS=700`, `CHUNK_OVERLAP_TOKENS=90`) that preserves page boundaries (each chunk maps to one page) and attaches `{document_name, page_number, section, chunk_text}`, with `section=None` when unavailable.
     - References R4.1, R4.2, R4.3, R4.4; Design: Chunking_Module, page-boundary-preserving tradeoff
-  - [ ]* 8.2 MVP — Write property test for chunk size bounds.
+  - [x]* 8.2 MVP — Write property test for chunk size bounds.
     - **Property 1: Chunk size stays within configured bounds**
     - **Validates: Requirements 4.1**
     - Hypothesis ≥100 iterations over arbitrary text; every non-final chunk within 500–800 tokens.
-  - [ ]* 8.3 MVP — Write property test for consecutive-chunk overlap.
+  - [x]* 8.3 MVP — Write property test for consecutive-chunk overlap.
     - **Property 2: Consecutive chunks overlap within the configured range**
     - **Validates: Requirements 4.2**
     - Hypothesis ≥100 iterations over text yielding ≥2 chunks; overlap within 10–15% of chunk size.
-  - [ ]* 8.4 MVP — Write property test for chunk metadata completeness.
+  - [x]* 8.4 MVP — Write property test for chunk metadata completeness.
     - **Property 3: Every chunk carries complete metadata**
     - **Validates: Requirements 4.3, 4.4**
     - Hypothesis ≥100 iterations with/without section info; assert non-empty `document_name`, in-range `page_number`, matching `chunk_text`, valid-or-null `section`.
-  - [ ]* 8.5 MVP — Write chunking edge-case unit tests: empty text, single short chunk, exact-boundary lengths, section-less input (`section is None`).
+  - [x]* 8.5 MVP — Write chunking edge-case unit tests: empty text, single short chunk, exact-boundary lengths, section-less input (`section is None`).
     - References R4.4; Design: Testing Strategy (chunking edge cases)
 
-- [ ] 9. MVP — Ingestion service (limits, hashing, dedupe, provenance, orchestration)
-  - [ ] 9.1 MVP — Implement PDF validation and SHA-256 document hashing in `src/ingestion/service.py`: enforce `MAX_PDF_SIZE_MB` (5MB) before parse, enforce `MAX_PDF_PAGES` (50) after parse, reject invalid PDFs (surface `PDFParseError`), compute the SHA-256 `Document_Hash` of file bytes; add unit tests.
+- [x] 9. MVP — Ingestion service (limits, hashing, dedupe, provenance, orchestration)
+  - [x] 9.1 MVP — Implement PDF validation and SHA-256 document hashing in `src/ingestion/service.py`: enforce `MAX_PDF_SIZE_MB` (5MB) before parse, enforce `MAX_PDF_PAGES` (50) after parse, reject invalid PDFs (surface `PDFParseError`), compute the SHA-256 `Document_Hash` of file bytes; add unit tests.
     - References R11.3, R11.4, R11.5, R11.6, R16.2; Design: Ingestion request flow (steps 1–4), Error Handling table
-  - [ ] 9.2 MVP — Implement the ingestion orchestration in `src/ingestion/service.py`: dedupe via `Document_Hash` (on match return "already ingested" referencing the existing document's `document_id`, write nothing and generate no new id), otherwise generate a fresh UUID `document_id` for the new non-duplicate document, then parse → chunk → embed via the active `EmbeddingProvider` → store in `VectorStore` under that `document_id`; on embedding failure report and identify the document while preserving prior data; record provenance (`embedding_provider`, `embedding_model`, `document_hash`) together with the `document_id` on the `DocumentRecord` and every chunk; return an `UploadResponse` carrying the `document_id`.
+  - [x] 9.2 MVP — Implement the ingestion orchestration in `src/ingestion/service.py`: dedupe via `Document_Hash` (on match return "already ingested" referencing the existing document's `document_id`, write nothing and generate no new id), otherwise generate a fresh UUID `document_id` for the new non-duplicate document, then parse → chunk → embed via the active `EmbeddingProvider` → store in `VectorStore` under that `document_id`; on embedding failure report and identify the document while preserving prior data; record provenance (`embedding_provider`, `embedding_model`, `document_hash`) together with the `document_id` on the `DocumentRecord` and every chunk; return an `UploadResponse` carrying the `document_id`.
     - References R5.1, R5.2, R5.3, R5.5, R11.1, R11.2, R11.7, R11.8, R16.3; Design: Ingestion request flow (steps 2–8, document_id assignment)
-  - [ ]* 9.3 MVP — Write property test for embedding provenance recording.
+  - [x]* 9.3 MVP — Write property test for embedding provenance recording.
     - **Property 6: Embedding provenance is recorded for every indexed unit**
     - **Validates: Requirements 5.5**
     - Hypothesis ≥100 iterations under a known provider/model; every stored chunk and the document record carry that provider/model.
-  - [ ]* 9.4 MVP — Write property test for idempotent (duplicate) ingestion.
+  - [x]* 9.4 MVP — Write property test for idempotent (duplicate) ingestion.
     - **Property 7: Ingestion is idempotent under identical content (duplicate detection)**
     - **Validates: Requirements 11.6, 11.7, 11.8**
     - Hypothesis ≥100 iterations ingesting identical bytes twice; store state (chunk count, document set) unchanged and second upload reported as duplicate.
-  - [ ]* 9.5 MVP — Write property test for document listing reflecting the ingested set.
+  - [x]* 9.5 MVP — Write property test for document listing reflecting the ingested set.
     - **Property 8: Document listing reflects exactly the ingested set**
     - **Validates: Requirements 12.1, 12.2**
     - Hypothesis ≥100 iterations over sets of distinct documents; listing returns exactly the ingested set (empty when none).
-  - [ ]* 9.6 MVP — Write ingestion boundary unit tests: files just over `MAX_PDF_SIZE_MB` / `MAX_PDF_PAGES` rejected with nothing stored.
+  - [x]* 9.6 MVP — Write ingestion boundary unit tests: files just over `MAX_PDF_SIZE_MB` / `MAX_PDF_PAGES` rejected with nothing stored.
     - References R11.5; Design: Testing Strategy (ingestion boundaries)
 
-- [ ] 10. MVP — Retrieval service with embedding-space compatibility gating
-  - [ ] 10.1 MVP — Implement `src/retrieval/service.py`: `Retrieval_Service` embeds the question via the active `EmbeddingProvider`, runs the compatibility check (block documents whose recorded provider/model differ from active, raising `ReembeddingRequiredError` listing affected documents), then returns top-k (`min(TOP_K, store_size)`) `RetrievedChunk`s ranked by similarity with full metadata; empty store → empty list; support `TOP_K` config default and per-query override.
+- [x] 10. MVP — Retrieval service with embedding-space compatibility gating
+  - [x] 10.1 MVP — Implement `src/retrieval/service.py`: `Retrieval_Service` embeds the question via the active `EmbeddingProvider`, runs the compatibility check (block documents whose recorded provider/model differ from active, raising `ReembeddingRequiredError` listing affected documents), then returns top-k (`min(TOP_K, store_size)`) `RetrievedChunk`s ranked by similarity with full metadata; empty store → empty list; support `TOP_K` config default and per-query override.
     - References R6.1, R6.2, R6.3, R6.4, R6.5, R15.6, R15.7; Design: Retrieval_Service
-  - [ ]* 10.2 MVP — Write property test for top-k ranking.
+  - [x]* 10.2 MVP — Write property test for top-k ranking.
     - **Property 5: Retrieval returns Top_K results ranked by similarity**
     - **Validates: Requirements 6.2, 6.3**
     - Hypothesis ≥100 iterations, stub embeddings, varied k; exactly `min(Top_K, store_size)` chunks in non-increasing score order.
-  - [ ]* 10.3 MVP — Write property test for embedding-space compatibility gating.
+  - [x]* 10.3 MVP — Write property test for embedding-space compatibility gating.
     - **Property 11: Retrieval is gated by embedding-space compatibility**
     - **Validates: Requirements 15.6, 15.7**
     - Hypothesis ≥100 iterations over documents with assorted provenance vs active provider/model; retrieval permitted for matches, blocked (re-embedding required) for mismatches.
-  - [ ]* 10.4 MVP — Write retrieval edge-case unit tests: empty store returns `[]` (R6.5); default k=5 and config override (R6.3).
+  - [x]* 10.4 MVP — Write retrieval edge-case unit tests: empty store returns `[]` (R6.5); default k=5 and config override (R6.3).
     - References R6.3, R6.5; Design: Testing Strategy (retrieval edge cases)
 
-- [ ] 11. MVP — Retrieval CLI
-  - [ ] 11.1 MVP — Implement `src/cli/retrieve.py` (`python -m src.cli.retrieve "question"`): reuse `Retrieval_Service`, print per retrieved chunk the `document_name`, `page_number`, and `chunk_text` (no LLM).
+- [x] 11. MVP — Retrieval CLI
+  - [x] 11.1 MVP — Implement `src/cli/retrieve.py` (`python -m src.cli.retrieve "question"`): reuse `Retrieval_Service`, print per retrieved chunk the `document_name`, `page_number`, and `chunk_text` (no LLM).
     - References R7.1, R7.2; Design: Retrieval CLI
 
-- [ ] 12. MVP — Query service, grounded prompt, and citation formatter
-  - [ ] 12.1 MVP — Implement the grounded prompt builder in `src/query/service.py`: construct the design's grounded template embedding every retrieved chunk (tagged with document + page) and the instruction to answer only from context and return the `No_Answer_Response` otherwise.
+- [x] 12. MVP — Query service, grounded prompt, and citation formatter
+  - [x] 12.1 MVP — Implement the grounded prompt builder in `src/query/service.py`: construct the design's grounded template embedding every retrieved chunk (tagged with document + page) and the instruction to answer only from context and return the `No_Answer_Response` otherwise.
     - References R8.1, R8.2; Design: Grounded prompt template
-  - [ ]* 12.2 MVP — Write property test for grounded-prompt content.
+  - [x]* 12.2 MVP — Write property test for grounded-prompt content.
     - **Property 9: The grounded prompt contains all context and grounding instructions**
     - **Validates: Requirements 8.1, 8.2**
     - Hypothesis ≥100 iterations over retrieved chunk sets; prompt contains every chunk's text and both grounding instructions.
-  - [ ] 12.3 MVP — Implement `src/query/formatter.py`: `Response_Formatter` builds `{answer, citations[]}` where each `Citation{document, page, excerpt}` is derived only from an in-context retrieved chunk; empty citations for `No_Answer_Response`.
+  - [x] 12.3 MVP — Implement `src/query/formatter.py`: `Response_Formatter` builds `{answer, citations[]}` where each `Citation{document, page, excerpt}` is derived only from an in-context retrieved chunk; empty citations for `No_Answer_Response`.
     - References R9.1, R9.2, R9.3, R9.4; Design: Response_Formatter
-  - [ ] 12.4 MVP — Implement `Query_Service.answer(question)` orchestration in `src/query/service.py`: reject empty/whitespace question without invoking the LLM; retrieve top-k; empty chunks → `No_Answer_Response` with empty citations; build prompt; call `LLMProvider.generate` (on failure return "answer generation failed", preserve prior data); detect the no-answer sentinel → empty citations; use `Response_Formatter` (task 12.3) to assemble the final `{answer, citations}`.
+  - [x] 12.4 MVP — Implement `Query_Service.answer(question)` orchestration in `src/query/service.py`: reject empty/whitespace question without invoking the LLM; retrieve top-k; empty chunks → `No_Answer_Response` with empty citations; build prompt; call `LLMProvider.generate` (on failure return "answer generation failed", preserve prior data); detect the no-answer sentinel → empty citations; use `Response_Formatter` (task 12.3) to assemble the final `{answer, citations}`.
     - References R8.3, R8.4, R10.4, R16.1, R16.3; Design: Query_Service flow, Error Handling table
-  - [ ]* 12.5 MVP — Write property test for citation validity.
+  - [x]* 12.5 MVP — Write property test for citation validity.
     - **Property 10: Every citation is derived from an in-context chunk**
     - **Validates: Requirements 9.1, 9.2, 9.3, 9.4, 10.2**
     - Hypothesis ≥100 iterations over retrieved chunk sets + grounded answers; every citation traces to an in-context chunk; empty on `No_Answer_Response`.
-  - [ ]* 12.6 MVP — Write query edge-case unit tests: empty/whitespace question rejected and LLM stub never called (R16.1); `No_Answer_Response` yields empty citations (R8.4, R9.3).
+  - [x]* 12.6 MVP — Write query edge-case unit tests: empty/whitespace question rejected and LLM stub never called (R16.1); `No_Answer_Response` yields empty citations (R8.4, R9.3).
     - References R8.4, R9.3, R16.1; Design: Testing Strategy (query edge cases)
 
-- [ ] 13. MVP — Re-embedding flow
-  - [ ] 13.1 MVP — Extend `VectorStore` with `get_document_chunks(document_id)` and scoped, all-or-nothing `replace_document_embeddings(document_id, chunks, embeddings, embedding_provider, embedding_model)` returning the updated `DocumentRecord`; both operations key off the stable `document_id` (never `document_hash`) so they address exactly the intended document; guarantee a document is never left partially re-embedded.
+- [x] 13. MVP — Re-embedding flow
+  - [x] 13.1 MVP — Extend `VectorStore` with `get_document_chunks(document_id)` and scoped, all-or-nothing `replace_document_embeddings(document_id, chunks, embeddings, embedding_provider, embedding_model)` returning the updated `DocumentRecord`; both operations key off the stable `document_id` (never `document_hash`) so they address exactly the intended document; guarantee a document is never left partially re-embedded.
     - References R5.5, R15.7; Design: Re-embedding flow (VectorStore ops keyed on document_id)
-  - [ ] 13.2 MVP — Implement the re-embedding flow in `src/ingestion/service.py`: load stored chunks by `document_id` (raise `DocumentNotFoundError` for an unknown `document_id`), re-embed `chunk_text` with the active provider, replace vectors within that `document_id`'s scope, update provenance on the record and every chunk; on embedding failure leave the document on its prior embedding space.
+  - [x] 13.2 MVP — Implement the re-embedding flow in `src/ingestion/service.py`: load stored chunks by `document_id` (raise `DocumentNotFoundError` for an unknown `document_id`), re-embed `chunk_text` with the active provider, replace vectors within that `document_id`'s scope, update provenance on the record and every chunk; on embedding failure leave the document on its prior embedding space.
     - References R5.3, R5.5, R15.7, R16.3; Design: Re-embedding flow (steps 1–5, load/replace by document_id)
-  - [ ]* 13.3 MVP — Write re-embedding example/edge-case unit tests: after switching active provider/model and re-embedding, provenance equals active provider/model, chunk texts unchanged, and the compatibility check re-admits the document (R15.7); unknown `document_id` raises `DocumentNotFoundError` with store unchanged; mid-re-embed embedding failure leaves the document on its prior space.
+  - [x]* 13.3 MVP — Write re-embedding example/edge-case unit tests: after switching active provider/model and re-embedding, provenance equals active provider/model, chunk texts unchanged, and the compatibility check re-admits the document (R15.7); unknown `document_id` raises `DocumentNotFoundError` with store unchanged; mid-re-embed embedding failure leaves the document on its prior space.
     - References R5.3, R15.7, R16.3; Design: Testing Strategy (re-embedding flow)
 
-- [ ] 14. MVP — FastAPI backend and error-to-HTTP mapping
+- [x] 14. MVP — FastAPI backend and error-to-HTTP mapping
   - [x] 14.1 MVP — Implement `src/api/app.py` endpoints wired to the services: `POST /documents/upload` (Ingestion_Service; success/duplicate/invalid/oversized/too-many-pages; `UploadResponse` includes the `document_id`), `GET /documents` (list; empty list when none), `POST /query` (validate non-empty question → `{answer, citations}`), `POST /documents/{document_id}/reembed` where the `{document_id}` path param is the stable `document_id` → `ReembedResponse` echoing that `document_id`.
     - References R10.1, R10.2, R10.3, R11.1, R11.2, R11.3, R12.1, R12.2, R15.7; Design: API_Backend, reembed contract (document_id path param)
   - [x] 14.2 MVP — Implement the full error-to-HTTP mapping from the Error Handling table: `EMPTY_QUESTION` 400, `INVALID_PDF` 400, `FILE_TOO_LARGE` 413, `TOO_MANY_PAGES` 413, duplicate 200, `EMBEDDING_FAILED` 502, `LLM_FAILED` 502, `MISSING_CREDENTIAL` 500, `REEMBEDDING_REQUIRED` 409, `DOCUMENT_NOT_FOUND` 404 — all returning credential-safe `ErrorResponse` bodies.
