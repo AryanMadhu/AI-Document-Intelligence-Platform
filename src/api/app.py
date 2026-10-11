@@ -45,6 +45,7 @@ app-level exception handler. The three categories are kept separate:
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 from fastapi import Depends, FastAPI, File, Request, UploadFile, status
@@ -73,6 +74,15 @@ from src.models import (
 from src.query import EmptyQuestionError, Query_Service
 from src.retrieval import ReembeddingRequiredError, Retrieval_Service
 from src.vectorstore import VectorStore
+
+
+# Module-level logger. Log STRINGS are fixed "CODE (STATUS)" text only — they
+# never contain exception text, request bodies, uploaded file contents, ids,
+# filenames, .env values, API keys, or any credential value. Where a traceback
+# is useful server-side (Category A ERROR handlers) it is attached via
+# ``exc_info=True`` only; that traceback goes to the SERVER log, never into the
+# HTTP response. Every HTTP response status + body stays byte-for-byte identical.
+logger = logging.getLogger(__name__)
 
 
 # Status-code constants. Prefer the current (non-deprecated) names and fall back
@@ -223,6 +233,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(EmptyQuestionError)
     async def _handle_empty_question(request: Request, exc: EmptyQuestionError):
         # D5: an empty/whitespace question VALUE is owned by Query_Service.
+        logger.warning("EMPTY_QUESTION (400)")
         return _error_response(
             "EMPTY_QUESTION",
             "A question is required.",
@@ -232,6 +243,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(PDFParseError)
     async def _handle_pdf_parse(request: Request, exc: PDFParseError):
         # exc.file is a filename (safe addressing handle), not a secret.
+        logger.warning("INVALID_PDF (400)")
         file_name = getattr(exc, "file", None)
         detail = "The file could not be parsed as a valid PDF."
         if file_name:
@@ -242,6 +254,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(FileTooLargeError)
     async def _handle_file_too_large(request: Request, exc: FileTooLargeError):
+        logger.warning("FILE_TOO_LARGE (413)")
         return _error_response(
             "FILE_TOO_LARGE",
             f"File exceeds the maximum size of {exc.limit_mb} MB.",
@@ -251,6 +264,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(TooManyPagesError)
     async def _handle_too_many_pages(request: Request, exc: TooManyPagesError):
         # D2: TOO_MANY_PAGES -> 413.
+        logger.warning("TOO_MANY_PAGES (413)")
         return _error_response(
             "TOO_MANY_PAGES",
             f"File exceeds the maximum of {exc.limit_pages} pages.",
@@ -260,6 +274,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(EmptyDocumentError)
     async def _handle_empty_document(request: Request, exc: EmptyDocumentError):
         # D2: EMPTY_DOCUMENT -> 422.
+        logger.warning("EMPTY_DOCUMENT (422)")
         return _error_response(
             "EMPTY_DOCUMENT",
             "The document contains no extractable text.",
@@ -270,6 +285,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def _handle_reembedding_required(
         request: Request, exc: ReembeddingRequiredError
     ):
+        logger.warning("REEMBEDDING_REQUIRED (409)")
         # ErrorResponse has only {error, detail}; the affected document ids are
         # safe addressing handles, so they go into the detail string (no new
         # Task-3 model fields are added).
@@ -283,7 +299,10 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(LLMError)
     async def _handle_llm_error(request: Request, exc: LLMError):
-        # Never echo exc text — provider payloads may be sensitive.
+        # Never echo exc text — provider payloads may be sensitive. The log MESSAGE
+        # is code+status only; exc_info=True attaches the traceback to the SERVER
+        # log for diagnosis (never into the HTTP response body).
+        logger.error("LLM_FAILED (502)", exc_info=True)
         return _error_response(
             "LLM_FAILED",
             "Answer generation failed.",
@@ -292,7 +311,8 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(EmbeddingError)
     async def _handle_embedding_error(request: Request, exc: EmbeddingError):
-        # Never echo exc text.
+        # Never echo exc text. Code+status log message; traceback via exc_info only.
+        logger.error("EMBEDDING_FAILED (502)", exc_info=True)
         return _error_response(
             "EMBEDDING_FAILED",
             "Embedding generation failed.",
@@ -315,6 +335,8 @@ def _register_exception_handlers(app: FastAPI) -> None:
         # MissingCredentialError propagate unchanged. str(exc) is value-free /
         # name-only per Task 2 (Config's message names the key, never its value)
         # — safe to include so the response identifies the missing key by name.
+        # Log message is code+status only; traceback via exc_info to server log.
+        logger.error("MISSING_CREDENTIAL (500)", exc_info=True)
         return _error_response(
             "MISSING_CREDENTIAL",
             str(exc),
@@ -325,6 +347,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def _handle_document_not_found(
         request: Request, exc: DocumentNotFoundError
     ):
+        logger.warning("DOCUMENT_NOT_FOUND (404)")
         return _error_response(
             "DOCUMENT_NOT_FOUND",
             "No document found with the given id.",
@@ -350,8 +373,13 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected(request: Request, exc: Exception):
-        # NEVER include a traceback, file path, env var, secret, provider/chroma
-        # internal, or exc repr. A single opaque, safe message.
+        # Return the safe, generic 500 response. We do NOT log the traceback
+        # here: Starlette's ServerErrorMiddleware (which this handler is passed
+        # to) re-raises the exception after the response is sent, so the ASGI
+        # server / Uvicorn logs the traceback — logging it here too would
+        # duplicate it. The RESPONSE never includes a traceback, file path, env
+        # var, secret, provider/chroma internal, or exc repr — just one opaque,
+        # safe message.
         return _error_response(
             "INTERNAL_ERROR",
             "An unexpected error occurred.",

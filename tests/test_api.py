@@ -1,9 +1,20 @@
 """API tests for the FastAPI backend (Task 14; R10, R11, R12, R15, R16).
 
-All tests are deterministic and fully offline. The HTTP endpoints are exercised
-with :class:`fastapi.testclient.TestClient`, and every service/provider is
-replaced via ``app.dependency_overrides`` so no real embedding model, LLM,
-network, or persistent Chroma store is ever touched.
+All tests are deterministic. The unit/API tests are fully offline: every
+service/provider is replaced via ``app.dependency_overrides`` with fakes/stubs,
+so no real embedding model, LLM, network call, or persistent Chroma store is
+ever touched. The HTTP endpoints are exercised with
+:class:`fastapi.testclient.TestClient`.
+
+The integration test (14.3) is also network-free: it uses a STUB embedding
+provider and a STUB LLM provider (no real model inference, no network). It does,
+however, exercise the REAL ingestion path — including the REAL
+``Chunking_Module``, which loads the MiniLM tokenizer via transformers'
+``AutoTokenizer``. That tokenizer must already be present in the local
+HuggingFace cache (it is, from earlier tasks), so the integration test does not
+hit the network as long as the MiniLM tokenizer files are cached locally. It
+writes only to a temp ``VectorStore`` under ``tmp_path`` (never a persistent
+``chroma_db/``).
 
 Two layers of coverage:
 
@@ -27,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -101,12 +113,15 @@ def _guard_no_real_builder_runs(monkeypatch):
     or monkeypatches the builders itself (the import-safety tests). So in a
     correct test NO real builder should ever run.
 
-    Why *record-and-delegate* rather than *raise*: a raise inside request
-    handling would be swallowed by the catch-all ``Exception`` handler and
-    turned into an HTTP 500, so the request might still "succeed" while a real
-    builder secretly ran. Recording the invocation and asserting at teardown
-    detects a stray real-builder call regardless of how the error would have
-    been handled.
+    Why *record AND raise* (hardened): the wrapper RECORDS the attempted
+    invocation first, then IMMEDIATELY ``raise``s instead of delegating to the
+    original builder. Never calling the original guarantees the guard can NEVER
+    initialize a real provider / persistent Chroma store or download a model,
+    even accidentally. A raise inside request handling could be turned into an
+    HTTP 500 by the catch-all ``Exception`` handler, so the request might still
+    "complete" — but because the invocation name was appended BEFORE raising,
+    the teardown assertion on the recorded list still catches the stray call
+    regardless of how the error was handled. Both safeguards are kept.
 
     Each builder's ``lru_cache`` is cleared at setup AND teardown so a cached
     singleton from a prior test can neither mask a call here nor leak into the
@@ -129,8 +144,14 @@ def _guard_no_real_builder_runs(monkeypatch):
 
         def _make_wrapper(builder_name: str, builder):
             def _wrapper(*args, **kwargs):
+                # Hardened guard: RECORD the attempted invocation first (so the
+                # teardown assertion still catches it even if the raise below is
+                # turned into an HTTP 500 by the catch-all), then IMMEDIATELY
+                # RAISE instead of delegating. Never calling the original builder
+                # guarantees the guard can NEVER initialize a real provider /
+                # persistent Chroma store / download a model, even accidentally.
                 invoked.append(builder_name)
-                return builder(*args, **kwargs)
+                raise AssertionError(f"real {builder_name} ran in a test")
 
             return _wrapper
 
@@ -1068,3 +1089,77 @@ def test_validation_error_body_does_not_echo_client_input() -> None:
     assert "VALIDATION-LEAK-TOKEN" not in resp.text
     # The service was never reached — validation precedes the dependency.
     assert fake.questions == []
+
+
+# ===========================================================================
+# Server-side logging (caplog) — code+status log line, traceback via exc_info
+# only, and the PUBLIC HTTP contract (status + body) is unchanged / unpolluted.
+#
+# The app logs through logging.getLogger("src.api.app"); records propagate to
+# the root logger so pytest's caplog captures them. These tests assert the LOG
+# behavior WITHOUT changing any response status or body — and prove the
+# exception's own internal text never leaks into the HTTP response body (it is
+# acceptable ONLY in the server-side traceback captured via exc_info).
+# ===========================================================================
+
+
+def test_llm_failure_logs_error_with_exc_info_without_polluting_response(caplog) -> None:
+    """LLMError: response is still 502 + fixed body; an ERROR record carries the
+
+    traceback via exc_info (whose exception type is LLMError), while the log
+    MESSAGE is just ``"LLM_FAILED (502)"``. The LLMError's own recognizable
+    internal token must NOT appear in the HTTP response body — it is acceptable
+    only in the server-side traceback (exc_info).
+    """
+    internal_token = "LLM-INTERNAL-TOKEN-xyz"
+    fake = _FakeQueryService(error=LLMError(internal_token))
+    client = _client_with_overrides(query=lambda: fake)
+
+    with caplog.at_level(logging.ERROR, logger="src.api.app"):
+        resp = client.post("/query", json={"question": "anything"})
+
+    # (a) Public HTTP contract unchanged: still 502 with the fixed detail.
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["error"] == "LLM_FAILED"
+    assert body["detail"] == "Answer generation failed."
+
+    # The internal token must NOT leak into the HTTP response body (server-side
+    # traceback via exc_info is the only acceptable place for it).
+    assert internal_token not in resp.text
+
+    # (b) An ERROR record was emitted with the fixed code+status message and a
+    # traceback attached via exc_info whose exception type is LLMError.
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, "expected an ERROR-level log record"
+    record = error_records[-1]
+    assert record.getMessage() == "LLM_FAILED (502)"
+    # The log MESSAGE itself carries only code+status (no exc text / token).
+    assert internal_token not in record.getMessage()
+    # exc_info is present and its exception type is LLMError.
+    assert record.exc_info is not None
+    assert record.exc_info[0] is LLMError
+    assert "LLMError" in caplog.text
+
+
+def test_empty_question_logs_warning_without_changing_response(caplog) -> None:
+    """EmptyQuestionError: a WARNING record ``"EMPTY_QUESTION (400)"`` is emitted
+
+    and the response is still 400 with the fixed public body (unchanged).
+    """
+    fake = _FakeQueryService(error=EmptyQuestionError("a question is required"))
+    client = _client_with_overrides(query=lambda: fake)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.app"):
+        resp = client.post("/query", json={"question": "   "})
+
+    # Public HTTP contract unchanged: still 400 with the fixed body.
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "EMPTY_QUESTION"
+    assert body["detail"] == "A question is required."
+
+    # A WARNING record with exactly the code+status message was emitted.
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    messages = [r.getMessage() for r in warning_records]
+    assert "EMPTY_QUESTION (400)" in messages
