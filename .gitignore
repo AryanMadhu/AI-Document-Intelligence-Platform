@@ -32,3 +32,12 @@ chroma_db/
 Thumbs.db
 .vscode/
 .idea/
+
+# Chroma DB exports
+exports/
+
+# Manual or Testing Scripts
+scripts/
+
+# Documents for now
+docs/

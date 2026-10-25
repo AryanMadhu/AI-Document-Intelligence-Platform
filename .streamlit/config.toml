@@ -1,0 +1,33 @@
+# Streamlit configuration for the AI Document Intelligence Platform UI.
+#
+# The UI is a thin HTTP client of the FastAPI backend; this file controls only
+# presentation (theme) and a couple of client-side server guards. It contains
+# NO secrets and NO backend URL (the backend URL comes from the API_BASE_URL
+# environment variable, read at runtime by ui/api_client.py).
+
+[theme]
+# Light theme. Colors chosen for WCAG AA contrast:
+#   - textColor (deep navy) on backgroundColor (white): high contrast body text.
+#   - primaryColor (teal) is used for accents/borders/interactive highlights.
+base = "light"
+primaryColor = "#0f766e"            # teal accent (buttons, focus, badges)
+textColor = "#0f172a"               # deep navy body text (AA on white)
+backgroundColor = "#ffffff"         # white main background
+secondaryBackgroundColor = "#f1f5f9" # light neutral (sidebar, cards)
+font = "sans serif"                  # built-in sans-serif font
+
+[browser]
+# Do not phone home with usage stats.
+gatherUsageStats = false
+
+[client]
+# Hide the Deploy / developer toolbar button (top-right). "minimal" keeps only
+# the essential running indicator and removes the Deploy button and dev menu.
+toolbarMode = "minimal"
+
+[server]
+# Client-side memory guard. Streamlit-level upload size cap in MB that protects
+# the UI process from pulling an oversized file into memory before it is sent to
+# the backend. Set to 5 to MATCH the backend's authoritative 5 MB limit (the
+# backend still enforces its own limit server-side regardless of this value).
+maxUploadSize = 5
