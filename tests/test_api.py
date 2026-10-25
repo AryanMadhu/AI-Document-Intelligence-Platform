@@ -69,7 +69,13 @@ from src.ingestion import (
     TooManyPagesError,
 )
 from src.ingestion.service import DocumentNotFoundError
-from src.llm.base import LLMError, LLMProvider
+from src.llm.base import (
+    LLMAuthError,
+    LLMError,
+    LLMProvider,
+    LLMQuotaExceededError,
+    LLMServiceBusyError,
+)
 from src.llm.gemini_provider import GeminiLLMProvider
 from src.models import (
     Chunk,
@@ -612,6 +618,78 @@ def test_llm_failure_returns_502_without_echoing_exception() -> None:
     assert body["error"] == "LLM_FAILED"
     assert body["detail"] == "Answer generation failed."
     assert secret_text not in body["detail"]
+
+
+def test_llm_service_busy_returns_503_service_busy() -> None:
+    """An LLMServiceBusyError maps to 503 SERVICE_BUSY and does NOT echo exc text."""
+    secret_text = "gemini-transient-trace-xyz"
+    fake = _FakeQueryService(error=LLMServiceBusyError(secret_text))
+    client = _client_with_overrides(query=lambda: fake)
+
+    resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body == {
+        "error": "SERVICE_BUSY",
+        "detail": "The assistant is busy right now. Please wait a moment and try again.",
+    }
+    # The dedicated subclass handler must own this — it must NOT fall through to
+    # the LLM_FAILED (502) handler even though it subclasses LLMError.
+    assert secret_text not in resp.text
+
+
+def test_plain_llm_error_still_maps_to_502_regression() -> None:
+    """Regression: a plain LLMError still maps to 502 LLM_FAILED (unchanged)."""
+    fake = _FakeQueryService(error=LLMError("plain failure"))
+    client = _client_with_overrides(query=lambda: fake)
+
+    resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == "LLM_FAILED"
+
+
+def test_llm_quota_exceeded_returns_429_quota_exceeded() -> None:
+    """An LLMQuotaExceededError maps to 429 QUOTA_EXCEEDED and does NOT echo exc text."""
+    secret_text = "gemini-quota-trace-xyz"
+    fake = _FakeQueryService(error=LLMQuotaExceededError(secret_text))
+    client = _client_with_overrides(query=lambda: fake)
+
+    resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body == {
+        "error": "QUOTA_EXCEEDED",
+        "detail": (
+            "The usage limit has been reached. Please check your quota and "
+            "try again after it resets."
+        ),
+    }
+    # The dedicated subclass handler must own this (not fall through to 502).
+    assert secret_text not in resp.text
+
+
+def test_llm_auth_failed_returns_500_llm_auth_failed() -> None:
+    """An LLMAuthError maps to 500 LLM_AUTH_FAILED and does NOT echo exc text."""
+    secret_text = "gemini-auth-trace-xyz"
+    fake = _FakeQueryService(error=LLMAuthError(secret_text))
+    client = _client_with_overrides(query=lambda: fake)
+
+    resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body == {
+        "error": "LLM_AUTH_FAILED",
+        "detail": (
+            "The server is not configured correctly for the language model. "
+            "Please contact the administrator."
+        ),
+    }
+    # The dedicated subclass handler must own this (not fall through to 502).
+    assert secret_text not in resp.text
 
 
 def test_embedding_failure_returns_502_without_echoing_exception() -> None:

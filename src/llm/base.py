@@ -38,6 +38,62 @@ class LLMError(Exception):
     """
 
 
+class LLMServiceBusyError(LLMError):
+    """Raised when the LLM is TEMPORARILY unavailable/overloaded (transient).
+
+    The provider classifies an underlying failure as transient (e.g. an HTTP
+    500/502/503/504, or an "UNAVAILABLE"/overloaded signal) and retries it a
+    bounded number of times. When the bounded retries are exhausted and the
+    condition is still transient, this error is raised instead of a plain
+    :class:`LLMError`.
+
+    A 429 / RESOURCE_EXHAUSTED is NO LONGER treated as transient here: an
+    exhausted usage quota / rate limit is a distinct, NON-retried condition
+    surfaced as :class:`LLMQuotaExceededError`. Transient therefore means the
+    500/502/503/504 + "UNAVAILABLE"/overloaded family only.
+
+    It subclasses :class:`LLMError` so any existing ``except LLMError`` keeps
+    catching it unchanged; callers that want to treat a transient overload
+    differently (e.g. map it to a distinct HTTP status) can catch this subclass
+    specifically. Messages stay value-free — they never contain a credential
+    value or a raw provider payload (R16.4).
+    """
+
+
+class LLMQuotaExceededError(LLMError):
+    """Raised when the provider's usage quota / rate limit is EXHAUSTED.
+
+    Corresponds to an HTTP 429 / ``RESOURCE_EXHAUSTED`` signal from the model
+    provider (a per-minute or per-day quota has been reached). This is a
+    distinct, EXPECTED condition that is NOT retried: retrying immediately would
+    not help and would only consume more of an already-exhausted budget. It
+    becomes available again once the quota resets.
+
+    It subclasses :class:`LLMError` so any existing ``except LLMError`` keeps
+    catching it unchanged; callers that want to map an exhausted quota to a
+    distinct HTTP status (e.g. 429) can catch this subclass specifically.
+    Messages stay value-free — they never contain a credential value or a raw
+    provider payload (R16.4).
+    """
+
+
+class LLMAuthError(LLMError):
+    """Raised when the provider rejects the credential (auth/permission).
+
+    Corresponds to an authentication / permission failure: an invalid or
+    unauthorized API key, an HTTP 401 / 403, a ``PERMISSION_DENIED`` /
+    ``UNAUTHENTICATED`` signal, or an API-key-related 400. This is a hard
+    configuration error, NOT a transient one, so it is NOT retried — retrying a
+    rejected credential would never succeed.
+
+    It subclasses :class:`LLMError` so any existing ``except LLMError`` keeps
+    catching it unchanged; callers that want to map a rejected credential to a
+    distinct HTTP status can catch this subclass specifically. Messages stay
+    value-free — they name the CONDITION only and never contain the credential
+    value or a raw provider payload (R16.4).
+    """
+
+
 class LLMProvider(ABC):
     """Generates a grounded answer from a prompt. Swappable via ``Config``.
 

@@ -62,7 +62,13 @@ from src.ingestion import (
     PDFParseError,
     TooManyPagesError,
 )
-from src.llm.base import LLMError, build_llm_provider
+from src.llm.base import (
+    LLMAuthError,
+    LLMError,
+    LLMQuotaExceededError,
+    LLMServiceBusyError,
+    build_llm_provider,
+)
 from src.models import (
     DocumentListResponse,
     ErrorResponse,
@@ -295,6 +301,60 @@ def _register_exception_handlers(app: FastAPI) -> None:
             "Re-embedding is required before querying the following "
             f"document(s): {ids}",
             status.HTTP_409_CONFLICT,
+        )
+
+    @app.exception_handler(LLMServiceBusyError)
+    async def _handle_llm_service_busy(
+        request: Request, exc: LLMServiceBusyError
+    ):
+        # Transient/expected overload AFTER bounded retries were exhausted.
+        # Registered BEFORE (and distinct from) the LLMError handler so Starlette
+        # dispatches this subclass to its OWN handler: Starlette walks the
+        # exception's MRO and picks the most specific registered handler, so a
+        # dedicated LLMServiceBusyError handler is required for the subclass to
+        # map to SERVICE_BUSY instead of LLM_FAILED. Because this is a
+        # transient/expected condition, it logs at WARNING (not ERROR) with the
+        # code+status only and NO exc_info (no traceback / no exc text).
+        logger.warning("SERVICE_BUSY (503)")
+        return _error_response(
+            "SERVICE_BUSY",
+            "The assistant is busy right now. Please wait a moment and try again.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    @app.exception_handler(LLMQuotaExceededError)
+    async def _handle_llm_quota_exceeded(
+        request: Request, exc: LLMQuotaExceededError
+    ):
+        # Exhausted usage quota / rate limit (429 / RESOURCE_EXHAUSTED). An
+        # EXPECTED, recoverable-after-reset condition, so it logs at WARNING
+        # (not ERROR) with the code+status only and NO exc_info — no traceback
+        # and no provider payload. Registered BEFORE the generic LLMError
+        # handler so Starlette's MRO dispatch routes this subclass here (same
+        # pattern as LLMServiceBusyError). Never echoes exc text.
+        logger.warning("QUOTA_EXCEEDED (429)")
+        return _error_response(
+            "QUOTA_EXCEEDED",
+            "The usage limit has been reached. Please check your quota and "
+            "try again after it resets.",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    @app.exception_handler(LLMAuthError)
+    async def _handle_llm_auth_failed(request: Request, exc: LLMAuthError):
+        # Rejected / unauthorized credential. A server misconfiguration surfaced
+        # as a 500 so the client never learns credential specifics. Logged at
+        # ERROR with code+status only and WITHOUT exc_info: the provider
+        # exception str/details could include response metadata, so NO traceback
+        # is attached — code+status is enough to be safe. Registered BEFORE the
+        # generic LLMError handler so Starlette's MRO dispatch routes this
+        # subclass here. Never echoes exc text.
+        logger.error("LLM_AUTH_FAILED (500)")
+        return _error_response(
+            "LLM_AUTH_FAILED",
+            "The server is not configured correctly for the language model. "
+            "Please contact the administrator.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     @app.exception_handler(LLMError)
