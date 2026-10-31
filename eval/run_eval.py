@@ -232,22 +232,206 @@ def retrieval_hit(
     return False
 
 
-def fact_coverage(answer: str, essential_facts: list[str]) -> tuple[int, int]:
+# ---------------------------------------------------------------------------
+# Deterministic token-overlap matching (OPT-IN alternative to strict substring).
+#
+# This is a stdlib-only, LLM-free, fully-deterministic matcher that tolerates
+# the paraphrase/formatting divergence a strict substring matcher cannot:
+#   * singular↔plural ("a category" ↔ "categories")
+#   * inserted filler words ("information unavailable" ↔ "information that is
+#     unavailable")
+#   * reformatting ("The input layer receives" ↔ "Input layer: Receives")
+# It is NOT the default — the strict substring matcher remains the default so
+# the existing baseline stays reproducible (see :func:`fact_coverage`).
+# ---------------------------------------------------------------------------
+
+# A modest set of common English stopwords. Deliberately small and documented:
+# these are high-frequency function words that carry little fact-identifying
+# signal, so dropping them makes the content-token overlap focus on the words
+# that actually distinguish one fact from another. This is NOT an exhaustive
+# linguistic stopword list — just enough to absorb the filler-word divergence
+# seen in the diagnosed answers (e.g. an inserted "that is").
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "of", "to", "in", "on", "is", "are", "was", "were",
+        "that", "this", "those", "these", "it", "its", "as", "and", "or",
+        "for", "with", "by", "from", "at", "be", "which", "when", "what",
+        "how", "than", "then", "whereas", "while", "such", "into", "using",
+        "used", "use",
+    }
+)
+
+# Default overlap ratio a fact's content tokens must reach to be "covered".
+_DEFAULT_OVERLAP_THRESHOLD = 0.85
+
+
+def _tokenize(text: Any) -> list[str]:
+    """Lowercase and split ``text`` into alphanumeric tokens.
+
+    Splits on every run of non-alphanumeric characters, so punctuation,
+    whitespace, colons, hyphens, etc. all act as separators. Non-string inputs
+    are coerced via ``str()`` so the function never raises.
+
+    Args:
+        text: The value to tokenize (coerced to ``str`` if not already).
+
+    Returns:
+        The list of lowercase ``[a-z0-9]+`` tokens in order.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _singularize(token: str) -> str:
+    """Apply a light, HEURISTIC plural→singular normalization to one token.
+
+    This is a crude rule-based stemmer, NOT a real lemmatizer: it has no
+    dictionary and will mis-handle irregular plurals (e.g. it will not turn
+    "mice" into "mouse") and can over-stem. It exists only to collapse the
+    common regular-plural divergence seen between a fact and a paraphrased
+    answer ("category" ↔ "categories", "value" ↔ "values").
+
+    Rules (first match wins):
+        * ``len > 3`` and endswith ``"ies"`` → stem + ``"y"`` (categories→category)
+        * ``len > 3`` and endswith ``"es"``  → strip ``"es"`` (classes→class)
+        * ``len > 3`` and endswith ``"s"`` and NOT endswith ``"ss"`` → strip ``"s"``
+          (values→value, but "class"/"process" left unchanged)
+        * otherwise → unchanged (short words like "is"/"as" are untouched)
+
+    Args:
+        token: A single already-lowercased token.
+
+    Returns:
+        The (possibly) singularized token.
+    """
+    if len(token) > 3 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 3 and token.endswith("es"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _content_tokens(text: Any) -> list[str]:
+    """Return the content tokens of ``text`` for overlap matching.
+
+    Pipeline: :func:`_tokenize` → drop stopwords (``_STOPWORDS``) →
+    :func:`_singularize` each surviving token → drop any that became empty.
+
+    Args:
+        text: The value to reduce to content tokens.
+
+    Returns:
+        The list of singularized, stopword-filtered content tokens (order
+        preserved; duplicates kept — callers that want a set should build one).
+    """
+    out: list[str] = []
+    for tok in _tokenize(text):
+        if tok in _STOPWORDS:
+            continue
+        stemmed = _singularize(tok)
+        if stemmed:
+            out.append(stemmed)
+    return out
+
+
+def fact_covered_by_overlap(
+    fact: str,
+    answer: str,
+    threshold: float = _DEFAULT_OVERLAP_THRESHOLD,
+) -> bool:
+    """Return whether ``answer`` covers ``fact`` by content-token overlap.
+
+    Definition (precise):
+        Let ``F`` be the SET of distinct content tokens of ``fact`` and ``A``
+        the SET of distinct content tokens of ``answer`` (content tokens =
+        lowercase ``[a-z0-9]+`` tokens with stopwords removed and each
+        singularized — see :func:`_content_tokens`). The coverage ratio is::
+
+            ratio = | F ∩ A | / | F |
+
+        i.e. the fraction of the fact's DISTINCT content tokens that also appear
+        in the answer's content-token set. The fact is covered iff
+        ``ratio >= threshold``.
+
+    Fallback: if the fact has ZERO content tokens (every token was a stopword),
+    the ratio is undefined, so this falls back to the strict normalized
+    substring check (:func:`normalize_text` substring) — the same behavior the
+    default matcher would give.
+
+    This is deterministic and LLM-free. See the module-level note on the
+    tradeoff: because it is a bag-of-words set-overlap test, it can OVER-credit
+    an answer that happens to contain the fact's content words in a different
+    arrangement or meaning.
+
+    Args:
+        fact: A single essential fact string.
+        answer: The produced answer text.
+        threshold: Minimum coverage ratio in ``[0, 1]`` (default
+            ``_DEFAULT_OVERLAP_THRESHOLD``).
+
+    Returns:
+        ``True`` iff the fact is considered covered.
+    """
+    fact_tokens = set(_content_tokens(fact))
+    if not fact_tokens:
+        # All-stopword fact: ratio is undefined -> fall back to substring.
+        return normalize_text(fact) in normalize_text(answer)
+    answer_tokens = set(_content_tokens(answer))
+    overlap = len(fact_tokens & answer_tokens)
+    ratio = overlap / len(fact_tokens)
+    return ratio >= threshold
+
+
+def fact_coverage(
+    answer: str,
+    essential_facts: list[str],
+    mode: str = "substring",
+    threshold: float = _DEFAULT_OVERLAP_THRESHOLD,
+) -> tuple[int, int]:
     """Return ``(num_present, total)`` essential facts covered by the answer.
 
-    A fact is present iff its normalized form is a substring of the normalized
-    answer (deterministic, case-insensitive, whitespace-insensitive — see
-    :func:`normalize_text`). This is a conservative lower bound on correctness:
-    a paraphrase that doesn't appear as a substring scores as missing (a
-    documented MVP limitation; an LLM-as-judge is Stretch).
+    Two matcher modes are supported; the DEFAULT is the strict substring
+    matcher so the existing baseline stays reproducible:
+
+    * ``mode="substring"`` (DEFAULT) — a fact is present iff its normalized form
+      is a substring of the normalized answer (deterministic, case-insensitive,
+      whitespace-insensitive — see :func:`normalize_text`). This is a
+      conservative lower bound on correctness: a paraphrase that doesn't appear
+      as a substring scores as missing (a documented MVP limitation; an
+      LLM-as-judge is Stretch).
+    * ``mode="overlap"`` — a fact is present iff its content-token overlap with
+      the answer reaches ``threshold`` (see :func:`fact_covered_by_overlap`).
+      This tolerates plural/singular, inserted filler words, and reformatting
+      WITHOUT an LLM, at the cost of possibly over-crediting bag-of-words
+      coincidences.
 
     Args:
         answer: The produced answer text.
         essential_facts: The predefined key facts a correct answer must cover.
+        mode: ``"substring"`` (default) or ``"overlap"``.
+        threshold: Overlap ratio threshold used only when ``mode == "overlap"``.
 
     Returns:
         ``(num_present, total)`` where ``total == len(essential_facts)``.
+
+    Raises:
+        ValueError: If ``mode`` is not ``"substring"`` or ``"overlap"``.
     """
+    if mode not in ("substring", "overlap"):
+        raise ValueError(
+            f"fact_coverage mode must be 'substring' or 'overlap', got {mode!r}."
+        )
+
+    if mode == "overlap":
+        present = sum(
+            1 for fact in essential_facts if fact_covered_by_overlap(fact, answer, threshold)
+        )
+        return present, len(essential_facts)
+
+    # Default: strict normalized substring (unchanged behavior).
     normalized_answer = normalize_text(answer)
     present = 0
     for fact in essential_facts:
@@ -503,6 +687,8 @@ def evaluate_question(
     query_service: Any,
     no_answer_sentinel: str,
     source_present: bool | None = None,
+    coverage_mode: str = "substring",
+    coverage_threshold: float = _DEFAULT_OVERLAP_THRESHOLD,
 ) -> dict[str, Any]:
     """Evaluate one Eval_Set question end-to-end and return a result row.
 
@@ -521,6 +707,10 @@ def evaluate_question(
         source_present: Whether ``q.source_document`` is indexed in the store
             (transparency flag; ``None`` when unknown). Does NOT change a miss
             into an error.
+        coverage_mode: Fact-coverage matcher mode passed to :func:`fact_coverage`
+            (``"substring"`` default, or ``"overlap"``).
+        coverage_threshold: Overlap ratio threshold (used only when
+            ``coverage_mode == "overlap"``).
 
     Returns:
         A per-question result dict (JSON-serializable).
@@ -565,7 +755,9 @@ def evaluate_question(
         citations = resp.citations
         row["answer_status"] = "evaluated"
         row["answer_text"] = answer_text
-        present, total = fact_coverage(answer_text, q.essential_facts)
+        present, total = fact_coverage(
+            answer_text, q.essential_facts, mode=coverage_mode, threshold=coverage_threshold
+        )
         row["fact_present"] = present
         row["fact_total"] = total
         # Citation validity needs the retrieved set; only compute it when
@@ -633,7 +825,13 @@ def _build_report(
         f"| embedding: {run_meta['embedding_provider']}/{run_meta['embedding_model']}  "
         f"| llm: {run_meta['llm_provider']}/{run_meta['llm_model']}  "
         f"| top_k: {run_meta['top_k']}  "
-        f"| dataset size: {run_meta['dataset_size']}"
+        f"| dataset size: {run_meta['dataset_size']}  "
+        f"| coverage_mode: {run_meta.get('coverage_mode', 'substring')}"
+        + (
+            f" (threshold {run_meta['coverage_threshold']:g})"
+            if run_meta.get("coverage_mode") == "overlap"
+            else ""
+        )
     )
     lines.append("")
     lines.append("## Aggregate")
@@ -750,6 +948,40 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code: ``0`` on success, non-zero on a fatal setup error
         (empty store, load failure).
     """
+    # --- CLI args (stdlib argparse) ---------------------------------------
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the RAG evaluation harness over the version-controlled "
+            "Eval_Set and write timestamped results."
+        )
+    )
+    parser.add_argument(
+        "--coverage-mode",
+        choices=("substring", "overlap"),
+        default="substring",
+        help=(
+            "Fact-coverage matcher. 'substring' (DEFAULT) is the strict "
+            "normalized-substring matcher that preserves the reproducible "
+            "baseline; 'overlap' is the deterministic token-overlap matcher "
+            "that tolerates paraphrase/formatting divergence."
+        ),
+    )
+    parser.add_argument(
+        "--overlap-threshold",
+        type=float,
+        default=_DEFAULT_OVERLAP_THRESHOLD,
+        help=(
+            "Minimum content-token overlap ratio for a fact to count as "
+            "covered when --coverage-mode=overlap (default "
+            f"{_DEFAULT_OVERLAP_THRESHOLD:g}). Ignored for substring mode."
+        ),
+    )
+    args = parser.parse_args(argv)
+    coverage_mode = args.coverage_mode
+    coverage_threshold = args.overlap_threshold
+
     # Local imports so that importing this module never drags in the heavy
     # provider SDKs / vector store (import safety for the test suite).
     from src.config import Config
@@ -809,6 +1041,8 @@ def main(argv: list[str] | None = None) -> int:
                 query_service,
                 NO_ANSWER_RESPONSE,
                 source_present=source_present,
+                coverage_mode=coverage_mode,
+                coverage_threshold=coverage_threshold,
             )
         )
 
@@ -821,6 +1055,10 @@ def main(argv: list[str] | None = None) -> int:
         "llm_model": config.llm_model,
         "top_k": config.top_k,
         "dataset_size": len(questions),
+        # Self-describing coverage matcher so results are reproducible. The
+        # threshold is recorded regardless of mode but only APPLIES in overlap.
+        "coverage_mode": coverage_mode,
+        "coverage_threshold": coverage_threshold,
     }
     markdown_text, json_obj = _build_report(rows, run_meta)
     md_path, json_path = _write_results(markdown_text, json_obj)
@@ -835,9 +1073,13 @@ def main(argv: list[str] | None = None) -> int:
         f"({retrieval.numerator:g}/{retrieval.denominator:g}, "
         f"errors={retrieval.errors})"
     )
+    _cov_label = (
+        f"mode={coverage_mode}"
+        + (f"@{coverage_threshold:g}" if coverage_mode == "overlap" else "")
+    )
     print(
         f"  Answer_Key_Fact_Coverage = {_fmt_score(coverage.score)} "
-        f"(mean over {coverage.evaluated}, errors={coverage.errors})"
+        f"(mean over {coverage.evaluated}, errors={coverage.errors}, {_cov_label})"
     )
     print(
         f"  Citation_Validity        = {_fmt_score(citations.score)} "

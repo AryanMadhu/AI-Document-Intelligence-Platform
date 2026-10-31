@@ -455,3 +455,189 @@ def test_evaluate_question_happy_path():
     assert row["fact_present"] == 1
     assert row["fact_total"] == 1
     assert row["citation_valid"] is True
+
+
+# ===========================================================================
+# Token helpers for the OPT-IN overlap matcher (_tokenize / _singularize /
+# _content_tokens). Deterministic, stdlib-only, no network.
+# ===========================================================================
+
+
+def test_tokenize_splits_on_non_alphanumeric_and_lowercases():
+    assert run_eval._tokenize("Input layer: Receives feature-values!") == [
+        "input",
+        "layer",
+        "receives",
+        "feature",
+        "values",
+    ]
+    # Digits are kept; punctuation/whitespace are separators.
+    assert run_eval._tokenize("Top-K = 5, k2") == ["top", "k", "5", "k2"]
+
+
+def test_tokenize_coerces_non_str():
+    assert run_eval._tokenize(123) == ["123"]
+
+
+def test_singularize_regular_plurals():
+    # ies -> y
+    assert run_eval._singularize("categories") == "category"
+    # plain trailing s -> stripped (words not ending in es/ss)
+    assert run_eval._singularize("models") == "model"
+    assert run_eval._singularize("numbers") == "number"
+    # es -> stripped (len > 3); "classes" -> "class"
+    assert run_eval._singularize("classes") == "class"
+
+
+def test_singularize_es_rule_can_over_stem_documented_heuristic():
+    # DOCUMENTED QUIRK: the ordered rules check "es" before plain "s", so an
+    # "-es" word whose singular is just "-e" (e.g. "value") over-stems to
+    # "valu". This is acceptable because overlap matching compares the SAME
+    # stemmer on both sides: the answer's "values" also stems to "valu", so the
+    # fact/answer tokens still agree. It is NOT a real lemmatizer.
+    assert run_eval._singularize("values") == "valu"
+
+
+def test_singularize_leaves_ss_and_short_words_alone():
+    # "class" ends in "ss" -> unchanged (not stripped to "clas").
+    assert run_eval._singularize("class") == "class"
+    assert run_eval._singularize("process") == "process"
+    # Short words are untouched.
+    assert run_eval._singularize("is") == "is"
+    assert run_eval._singularize("as") == "as"
+    # len == 3 boundary: "yes" should be left as-is (rule requires len > 3).
+    assert run_eval._singularize("yes") == "yes"
+
+
+def test_content_tokens_drops_stopwords_and_singularizes():
+    # "a" and "the" are stopwords; "categories" singularized to "category".
+    assert run_eval._content_tokens("Classification predicts a category") == [
+        "classification",
+        "predict",
+        "category",
+    ]
+    # "that is" filler removed (both stopwords), plural normalized.
+    assert run_eval._content_tokens("information that is unavailable") == [
+        "information",
+        "unavailable",
+    ]
+
+
+# ===========================================================================
+# fact_covered_by_overlap (the opt-in matcher)
+# ===========================================================================
+
+
+def test_overlap_matches_plural_singular_divergence():
+    fact = "Classification predicts a category"
+    answer = "Classification predicts categories into discrete labels."
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.85) is True
+
+
+def test_overlap_matches_reformatting():
+    fact = "The input layer receives feature values"
+    answer = "Input layer: Receives feature values from the dataset."
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.85) is True
+
+
+def test_overlap_matches_inserted_filler_words():
+    fact = (
+        "Data leakage occurs when information unavailable at prediction time "
+        "influences training or evaluation"
+    )
+    answer = (
+        "Data leakage occurs when information that is unavailable at prediction "
+        "time influences training or evaluation of the model."
+    )
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.85) is True
+
+
+def test_overlap_absent_fact_is_false():
+    fact = "Gradient descent minimizes the loss function"
+    answer = "Bananas are a good source of potassium and fiber."
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.85) is False
+
+
+def test_overlap_threshold_half_tokens_is_false_at_085():
+    # Fact has 4 distinct content tokens; answer contains only 2 of them
+    # -> ratio 0.5 < 0.85 -> not covered.
+    fact = "alpha beta gamma delta"
+    answer = "alpha beta omega sigma"
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.85) is False
+    # Same fact clears a lower threshold.
+    assert run_eval.fact_covered_by_overlap(fact, answer, 0.5) is True
+
+
+def test_overlap_all_stopword_fact_falls_back_to_substring():
+    # A fact made entirely of stopwords has no content tokens -> fall back to
+    # the strict normalized-substring behavior.
+    fact = "it is the"  # all stopwords under _STOPWORDS
+    assert run_eval._content_tokens(fact) == []
+    # Substring present (case/space-insensitive) -> covered.
+    assert run_eval.fact_covered_by_overlap(fact, "Yes, IT IS THE answer here.", 0.85) is True
+    # Substring absent -> not covered.
+    assert run_eval.fact_covered_by_overlap(fact, "completely different text", 0.85) is False
+
+
+# ===========================================================================
+# fact_coverage mode switching (regression: default stays substring)
+# ===========================================================================
+
+
+def test_fact_coverage_default_is_substring_regression():
+    # Paraphrase that is NOT a substring: strict default scores it missing,
+    # exactly as the pre-refinement behavior did.
+    answer = "Classification predicts categories."
+    facts = ["classification predicts a category"]
+    assert run_eval.fact_coverage(answer, facts) == (0, 1)
+    assert run_eval.fact_coverage(answer, facts, mode="substring") == (0, 1)
+
+
+def test_fact_coverage_overlap_credits_paraphrase_higher_than_substring():
+    answer = "Classification predicts categories into discrete labels."
+    facts = ["classification predicts a category", "regression predicts a number"]
+    substring = run_eval.fact_coverage(answer, facts, mode="substring")
+    overlap = run_eval.fact_coverage(answer, facts, mode="overlap")
+    assert substring == (0, 2)
+    assert overlap == (1, 2)
+    assert overlap[0] > substring[0]
+
+
+def test_fact_coverage_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="substring"):
+        run_eval.fact_coverage("x", ["y"], mode="semantic")
+
+
+# ===========================================================================
+# evaluate_question with coverage_mode="overlap" (FAKE services, no network)
+# ===========================================================================
+
+
+def test_evaluate_question_overlap_credits_paraphrase_substring_scores_zero():
+    from src.models import EvalQuestion
+
+    q = EvalQuestion(
+        id="ML-02",
+        question="What does classification predict?",
+        essential_facts=["classification predicts a category"],
+        source_document="doc.pdf",
+        source_page=1,
+    )
+    retrieved = [make_chunk("doc.pdf", 1, "classification predicts categories")]
+    retrieval = FakeRetrieval(result=retrieved)
+    cite = Citation(document="doc.pdf", page=1, excerpt="classification predicts categories")
+    query = FakeQuery(
+        response=FakeResponse("Classification predicts categories into labels.", [cite])
+    )
+
+    # Default substring mode scores the paraphrase as 0 present.
+    sub_row = run_eval.evaluate_question(q, retrieval, query, NO_ANSWER)
+    assert sub_row["fact_present"] == 0
+
+    # Overlap mode credits the same paraphrased correct answer.
+    ov_row = run_eval.evaluate_question(
+        q, retrieval, query, NO_ANSWER, coverage_mode="overlap"
+    )
+    assert ov_row["fact_present"] == 1
+    assert ov_row["fact_total"] == 1
+    assert ov_row["answer_status"] == "evaluated"
