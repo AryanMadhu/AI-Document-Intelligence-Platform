@@ -99,6 +99,10 @@ def _init_state() -> None:
         st.session_state.documents = []
     if "documents_loaded" not in st.session_state:
         st.session_state.documents_loaded = False
+    if "uploader_key" not in st.session_state:
+        # Bumped after a confirmed-indexed upload to recreate the file_uploader
+        # widget empty (clearing the selected filename + the cancel × control).
+        st.session_state.uploader_key = 0
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +124,26 @@ def _refresh_documents() -> None:
         st.warning(UNEXPECTED_RESPONSE_MESSAGE)
 
 
-def _do_upload(filename: str, data_bytes: bytes) -> None:
-    """Upload a PDF and surface a safe summary; refresh the doc list on success."""
+def _do_upload(filename: str, data_bytes: bytes) -> bool:
+    """Upload a PDF and surface a safe summary; refresh the doc list on success.
+
+    Returns ``True`` ONLY on a CONFIRMED-indexed response (HTTP-200 with either
+    ``status == "ingested"`` or ``status == "duplicate"`` — both confirm the
+    document IS indexed). Returns ``False`` on any transport/validation FAILURE
+    (``ApiError`` or malformed body) so the caller can leave the selected file in
+    place for a retry. The caller uses this flag to decide whether to reset the
+    uploader widget.
+    """
     with st.spinner(f"Uploading… {SLOW_FIRST_OP_NOTE}"):
         result = get_client().upload_document(filename, data_bytes)
 
     if isinstance(result, ApiError):
         st.error(friendly_error(result.code, result.detail))
-        return
+        return False
 
     if not (isinstance(result, ApiOk) and validate_upload_response(result.payload)):
         st.error(UNEXPECTED_RESPONSE_MESSAGE)
-        return
+        return False
 
     payload = result.payload
     safe_name = escape_markdown_strict(payload["document_name"])
@@ -144,6 +156,10 @@ def _do_upload(filename: str, data_bytes: bytes) -> None:
     else:
         st.success(f"Added **{safe_name}** ({format_page_count(pages)}).")
     _refresh_documents()
+    # Both "ingested" and "duplicate" are HTTP-200 confirmations that the document
+    # IS indexed, so BOTH reset the uploader; only transport/validation FAILURES
+    # (handled above) keep the selected file so the user can retry.
+    return True
 
 
 def _do_query(question: str) -> None:
@@ -175,14 +191,21 @@ def _render_sidebar() -> None:
         st.header("Documents")
 
         uploaded = st.file_uploader(
-            "Upload a PDF", type=["pdf"], help=UPLOAD_HINT
+            "Upload a PDF",
+            type=["pdf"],
+            help=UPLOAD_HINT,
+            key=f"pdf_uploader_{st.session_state.uploader_key}",
         )
         st.caption(UPLOAD_HINT)
         if st.button("Upload", type="primary", use_container_width=True):
             if uploaded is None:
                 st.warning("Choose a PDF file first.")
-            else:
-                _do_upload(uploaded.name, uploaded.getvalue())
+            elif _do_upload(uploaded.name, uploaded.getvalue()):
+                # Confirmed indexed (ingested or duplicate): bump the key so the
+                # uploader widget is recreated empty, clearing the selected
+                # file + ×. Failures leave the widget as-is so the user can retry.
+                st.session_state.uploader_key += 1
+                st.rerun()
 
         st.divider()
 

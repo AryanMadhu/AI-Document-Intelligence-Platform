@@ -20,6 +20,10 @@ data/*
 !data/.gitkeep
 eval/*
 !eval/.gitkeep
+!eval/*.json
+!eval/*.md
+!eval/*.py
+eval/results/
 notebooks/*
 !notebooks/.gitkeep
 

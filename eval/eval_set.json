@@ -1,0 +1,93 @@
+[
+  {
+    "id": "ML-01",
+    "question": "What is the difference between training and inference in machine learning?",
+    "essential_facts": [
+      "Training is the process of adjusting the model using examples",
+      "Inference is the later process of using the trained model"
+    ],
+    "source_document": "machine_learning_fundamentals.pdf",
+    "source_page": 1
+  },
+  {
+    "id": "ML-02",
+    "question": "How do classification and regression differ?",
+    "essential_facts": [
+      "Classification predicts a category",
+      "Regression predicts a numerical value"
+    ],
+    "source_document": "machine_learning_fundamentals.pdf",
+    "source_page": 2
+  },
+  {
+    "id": "ML-03",
+    "question": "What are data leakage and overfitting, and why are they problematic?",
+    "essential_facts": [
+      "Data leakage occurs when information unavailable at prediction time influences training or evaluation",
+      "Overfitting occurs when a model learns details or noise specific to its training examples"
+    ],
+    "source_document": "machine_learning_fundamentals.pdf",
+    "source_page": 3
+  },
+  {
+    "id": "NN-01",
+    "question": "What are the roles of the input, hidden, and output layers in a feed-forward neural network?",
+    "essential_facts": [
+      "The input layer receives feature values",
+      "Hidden layers transform representations",
+      "The output layer produces the model's final prediction"
+    ],
+    "source_document": "neural_networks_primer.pdf",
+    "source_page": 1
+  },
+  {
+    "id": "NN-02",
+    "question": "What does backpropagation do during neural-network training?",
+    "essential_facts": [
+      "Backpropagation computes gradients of the loss with respect to the network's parameters",
+      "An optimizer uses those gradients to update the parameters"
+    ],
+    "source_document": "neural_networks_primer.pdf",
+    "source_page": 2
+  },
+  {
+    "id": "NN-03",
+    "question": "How do precision and recall differ in classification?",
+    "essential_facts": [
+      "Precision measures the proportion of predicted positive cases that are truly positive",
+      "Recall measures the proportion of actual positive cases that the model identifies"
+    ],
+    "source_document": "neural_networks_primer.pdf",
+    "source_page": 3
+  },
+  {
+    "id": "NLP-01",
+    "question": "What is tokenization, and what kinds of units can be tokens?",
+    "essential_facts": [
+      "Tokenization divides text into smaller units called tokens",
+      "a word, a subword unit, or a character"
+    ],
+    "source_document": "natural_language_processing_basics.pdf",
+    "source_page": 1
+  },
+  {
+    "id": "NLP-02",
+    "question": "What is TF-IDF designed to emphasize when representing text?",
+    "essential_facts": [
+      "Term frequency measures how often a term occurs in a document",
+      "Inverse document frequency reduces the weight of terms that appear in many documents"
+    ],
+    "source_document": "natural_language_processing_basics.pdf",
+    "source_page": 2
+  },
+  {
+    "id": "NLP-03",
+    "question": "How does retrieval-augmented generation combine retrieval and generation?",
+    "essential_facts": [
+      "A retrieval component selects relevant passages from a collection",
+      "a language model uses those passages as context when producing an answer"
+    ],
+    "source_document": "natural_language_processing_basics.pdf",
+    "source_page": 3
+  }
+]
