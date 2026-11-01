@@ -166,24 +166,24 @@ Sub-tasks marked with `*` are optional (test/eval-only) and can be skipped for a
       - **Upload size guard** — a *before-read* size guard runs in a module-level `_handle_upload` helper: when `UploadFile.size` is known it rejects over-limit uploads without reading the body; when `size` is `None` (missing/unreliable `Content-Length`) it does a **bounded** read of at most `max_bytes + 1` bytes and rejects if over — never pulling an unbounded body into memory. Task 9's `len(file_bytes)` check remains the authoritative backstop.
       - **MISSING_CREDENTIAL** — the handler is registered and returns a name-only (value-free) 500, but is **currently unreachable in the MVP**: a missing `GEMINI_API_KEY` is caught in the Gemini provider and re-raised as `LLMError` → 502 `LLM_FAILED`, and the MVP sentence-transformers embedding provider needs no credential. The handler is retained for a future credential-propagating provider.
 
-- [ ] 15. MVP — Streamlit UI
-  - [ ] 15.1 MVP — Implement `ui/app.py`: PDF upload control, chat-style question input, display answer text with citations as expandable cards showing `document`/`page`/`excerpt`, and an error message on answer-generation failure. Stateless per query (no conversation memory).
+- [x] 15. MVP — Streamlit UI
+  - [x] 15.1 MVP — Implement `ui/app.py`: PDF upload control, chat-style question input, display answer text with citations as expandable cards showing `document`/`page`/`excerpt`, and an error message on answer-generation failure. Stateless per query (no conversation memory).
     - References R13.1, R13.2, R13.3, R13.4, R13.5; Design: UI component
 
-- [ ] 16. MVP — Evaluation corpus and Eval_Set
-  - [ ] 16.1 MVP — Add 3–5 real domain PDFs to `data/` and author `eval/eval_set.json` with 8–10 questions, each recording `essential_facts`, `source_document`, and `source_page`.
+- [x] 16. MVP — Evaluation corpus and Eval_Set
+  - [x] 16.1 MVP — Add 3–5 real domain PDFs to `data/` and author `eval/eval_set.json` with 8–10 questions, each recording `essential_facts`, `source_document`, and `source_page`.
     - References R2.1, R2.2, R2.3, R2.4; Design: Data Models (EvalQuestion), Project Structure
 
-- [ ] 17. MVP — Evaluation script (three metrics)
-  - [ ] 17.1 MVP — Implement `eval/run_eval.py`: run every Eval_Set question through the query pipeline and compute Retrieval_Hit_Rate (source chunk within top-k), Answer_Key_Fact_Coverage (deterministic normalized fact matching), and Citation_Validity (every citation traces to an in-context chunk); write aggregate + per-question results to `eval/results.md`.
+- [x] 17. MVP — Evaluation script (three metrics)
+  - [x] 17.1 MVP — Implement `eval/run_eval.py`: run every Eval_Set question through the query pipeline and compute Retrieval_Hit_Rate (source chunk within top-k), Answer_Key_Fact_Coverage (deterministic normalized fact matching), and Citation_Validity (every citation traces to an in-context chunk); write aggregate + per-question results to `eval/results.md`.
     - References R14.1, R14.2, R14.3, R14.4, R14.5; Design: Evaluation Design, Results file
-  - [ ]* 17.2 MVP — Write evaluation-metric unit tests: each metric equals a hand-computed value on fixed inputs and is bounded in [0,1].
+  - [x]* 17.2 MVP — Write evaluation-metric unit tests: each metric equals a hand-computed value on fixed inputs and is bounded in [0,1].
     - References R14.2, R14.3, R14.4; Design: Testing Strategy (evaluation metrics)
   - [ ]* 17.3 Stretch — Add an LLM-as-judge scorer option for Answer_Key_Fact_Coverage to catch semantic paraphrases.
     - References R14.3; Design: Evaluation Design (Metric 2 limitation — Stretch)
 
-- [ ] 18. MVP — Checkpoint
-  - [ ] 18.1 MVP — Ensure all tests pass, ask the user if questions arise.
+- [x] 18. MVP — Checkpoint
+  - [x] 18.1 MVP — Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 19. MVP — Containerization
   - [ ] 19.1 MVP — Write a `Dockerfile` (`python:3.11-slim`, install pinned `requirements.txt`, run FastAPI + Streamlit) that builds a runnable image.
