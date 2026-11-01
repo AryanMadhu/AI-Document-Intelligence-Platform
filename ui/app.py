@@ -103,6 +103,10 @@ def _init_state() -> None:
         # Bumped after a confirmed-indexed upload to recreate the file_uploader
         # widget empty (clearing the selected filename + the cancel × control).
         st.session_state.uploader_key = 0
+    if "pending_delete" not in st.session_state:
+        # document_id awaiting a two-step delete confirmation, or None when no
+        # delete is pending. Only one document can be pending at a time.
+        st.session_state.pending_delete = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +166,78 @@ def _do_upload(filename: str, data_bytes: bytes) -> bool:
     return True
 
 
+def _do_delete(document_id: str, document_name: str) -> bool:
+    """Delete a document via the client; surface a safe message.
+
+    Returns ``True`` ONLY on a confirmed-deleted response (an ``ApiOk`` whose
+    payload is a dict carrying ``status == "deleted"``). Returns ``False`` on any
+    transport/validation FAILURE (``ApiError`` or a malformed/unexpected body) so
+    the caller keeps the document in place. All surfaced messages are safe and
+    generic (see :mod:`ui.presentation`).
+
+    Args:
+        document_id: The stable id of the document to delete (internal key only;
+            never displayed).
+        document_name: The document filename, used only for an escaped,
+            user-facing error line when needed.
+
+    Returns:
+        ``True`` on confirmed deletion, else ``False``.
+    """
+    with st.spinner("Deleting…"):
+        result = get_client().delete_document(document_id)
+
+    if isinstance(result, ApiError):
+        st.error(friendly_error(result.code, result.detail))
+        return False
+
+    # Confirm the success body is a dict reporting the deleted status.
+    if (
+        isinstance(result, ApiOk)
+        and isinstance(result.payload, dict)
+        and result.payload.get("status") == "deleted"
+    ):
+        return True
+
+    # Any other 2xx shape is an unexpected response.
+    st.error(UNEXPECTED_RESPONSE_MESSAGE)
+    return False
+
+
+def _clear_citations_for_document(document_name: str) -> None:
+    """Drop transcript entries that cite ``document_name`` (stale-citation purge).
+
+    Called ONLY after a confirmed successful deletion. For each transcript entry
+    carrying ``citations``, if ANY citation's ``document`` equals the deleted
+    ``document_name`` the ENTIRE Q&A entry is removed, so the UI never shows a
+    citation that points at a now-deleted source. Entries that do not cite the
+    deleted document are preserved unchanged.
+
+    MVP simplification (documented intentionally): if an entry has mixed
+    citations referencing several documents, the whole entry is still dropped
+    when any one of them is the deleted document. Dropping the entire entry is
+    the simplest correct behavior and is acceptable/safe for the MVP — it never
+    leaves a stale citation behind, at the cost of occasionally removing an
+    answer that also cited a surviving document.
+
+    Args:
+        document_name: The ``document_name`` (== citation ``document``) of the
+            just-deleted document.
+    """
+    transcript = st.session_state.transcript
+    kept = []
+    for entry in transcript:
+        citations = entry.get("citations")
+        if isinstance(citations, list) and any(
+            isinstance(c, dict) and c.get("document") == document_name
+            for c in citations
+        ):
+            # Entry cites the deleted document -> drop it entirely.
+            continue
+        kept.append(entry)
+    st.session_state.transcript = kept
+
+
 def _do_query(question: str) -> None:
     """Send the current question only; append the outcome to the transcript.
 
@@ -219,17 +295,78 @@ def _render_sidebar() -> None:
             st.caption("No documents indexed yet.")
             return
         # Show name + pages + ingested date ONLY (chunk count dropped).
-        # document_id and document_hash are intentionally hidden.
+        # document_id and document_hash are intentionally hidden; document_id is
+        # used only as the internal key/action target for the Delete control.
         for doc in documents:
-            name = escape_markdown_strict(str(doc.get("document_name", "")))
-            pages = format_page_count(doc.get("page_count", "?"))
-            ingested = escape_markdown_strict(
-                format_timestamp(doc.get("ingested_at", ""))
+            _render_document_row(doc)
+
+
+def _render_document_row(doc: dict) -> None:
+    """Render one sidebar document row with a two-step Delete control.
+
+    The ``document_id`` stays HIDDEN (used only as the internal action key); the
+    document is identified on screen by its escaped filename. Clicking Delete
+    sets ``pending_delete`` to this doc's id (it does NOT delete yet); a
+    confirmation line with Confirm/Cancel is shown while this doc is pending.
+    """
+    document_id = str(doc.get("document_id", ""))
+    raw_name = str(doc.get("document_name", ""))
+    name = escape_markdown_strict(raw_name)
+    pages = format_page_count(doc.get("page_count", "?"))
+    ingested = escape_markdown_strict(format_timestamp(doc.get("ingested_at", "")))
+
+    st.markdown(f"**{name}**")
+    st.caption(pages)
+    st.caption(f"Ingested: {ingested}")
+
+    is_pending = st.session_state.pending_delete == document_id
+    if not is_pending:
+        # Step 1: arm the confirmation (never deletes on this click).
+        if st.button(
+            "Delete",
+            key=f"delete_{document_id}",
+            use_container_width=True,
+        ):
+            st.session_state.pending_delete = document_id
+            st.rerun()
+    else:
+        # Step 2: confirm / cancel. Identify the doc by its (escaped) filename.
+        st.warning(f"Delete **{name}**? This cannot be undone.")
+        confirm_col, cancel_col = st.columns(2)
+        with confirm_col:
+            confirmed = st.button(
+                "Confirm delete",
+                key=f"confirm_delete_{document_id}",
+                type="primary",
+                use_container_width=True,
             )
-            st.markdown(f"**{name}**")
-            st.caption(pages)
-            st.caption(f"Ingested: {ingested}")
-            st.divider()
+        with cancel_col:
+            cancelled = st.button(
+                "Cancel",
+                key=f"cancel_delete_{document_id}",
+                use_container_width=True,
+            )
+
+        if confirmed:
+            if _do_delete(document_id, raw_name):
+                # Success: purge stale citations, clear the pending flag, refresh
+                # the list, and rerun so the removed doc disappears immediately.
+                _clear_citations_for_document(raw_name)
+                st.session_state.pending_delete = None
+                st.success(f"Deleted {name}.")
+                _refresh_documents()
+                st.rerun()
+            else:
+                # Failure: keep the document and transcript; close the confirm UI
+                # (clear the pending flag) WITHOUT a rerun so the error stays
+                # visible. Nothing is removed and no stale citation is cleared.
+                st.session_state.pending_delete = None
+        elif cancelled:
+            # Cancel: no API call, no state change beyond closing the confirm UI.
+            st.session_state.pending_delete = None
+            st.rerun()
+
+    st.divider()
 
 
 def _render_citations(citations: list) -> None:

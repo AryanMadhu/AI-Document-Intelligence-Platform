@@ -327,6 +327,61 @@ class VectorStore:
             ingested_at=datetime.fromisoformat(preserved_ingested_at_iso),
         )
 
+    def delete_document(self, document_id: str) -> None:
+        """Delete every chunk belonging to ``document_id`` (scoped, verified).
+
+        Addressing: the document is addressed strictly by its stable
+        ``document_id`` (the addressing handle) — **never** by
+        ``document_hash``. Only chunks carrying this ``document_id`` are removed;
+        chunks of other documents are untouched.
+
+        Mechanism: issues a single document-scoped
+        ``delete(where={"document_id": document_id})``, then **verifies** that no
+        chunk carrying this ``document_id`` remains by re-querying the
+        collection. If any residual chunk is still present the delete is treated
+        as failed and a :class:`RuntimeError` is raised — this guards against a
+        silent *partial* delete rather than reporting a false success.
+
+        Not transactional (honest): Chroma offers no cross-operation
+        transaction, so this is a single ``delete`` followed by a separate
+        post-verification read — NOT an atomic transaction. The verification
+        catches a residual/failed delete after the fact; it cannot roll one back.
+
+        Existence / not-found: this method does NOT decide "document not found".
+        Deleting a ``where`` match that no chunk satisfies is a harmless no-op in
+        Chroma (it removes nothing and the verification trivially passes), so an
+        unknown ``document_id`` does not raise here. The SERVICE layer
+        (:meth:`src.ingestion.service.Ingestion_Service.delete_document`) is
+        responsible for the existence check and the
+        :class:`~src.ingestion.service.DocumentNotFoundError` for an unknown id.
+
+        Errors from Chroma itself are intentionally **not swallowed**: any
+        exception raised by the underlying delete propagates to the caller so a
+        storage failure can never be mistaken for a successful delete.
+
+        Args:
+            document_id: The stable UUID the document is addressed by.
+
+        Raises:
+            RuntimeError: If the post-delete verification finds residual chunks
+                still carrying ``document_id`` (a partial/failed delete). The
+                message is value-free (names neither chunk text nor secrets).
+        """
+        # Single document-scoped delete; let any Chroma exception propagate.
+        self._collection.delete(where={"document_id": document_id})
+
+        # Post-verify: no chunk may remain for this document_id. include=[] keeps
+        # the read cheap (ids are always returned; no metadata/embeddings pulled).
+        remaining = self._collection.get(
+            where={"document_id": document_id},
+            include=[],
+        )
+        if remaining.get("ids"):
+            raise RuntimeError(
+                "deletion verification failed: chunks still present for the "
+                "document"
+            )
+
     def query(
         self,
         query_embedding: list[float],

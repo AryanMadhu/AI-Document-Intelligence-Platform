@@ -139,6 +139,10 @@ class ApiClient:
         """GET and translate the outcome into a typed result."""
         return self._request("GET", path, **kwargs)
 
+    def _delete(self, path: str, **kwargs: Any) -> ApiOk | ApiError:
+        """DELETE and translate the outcome into a typed result."""
+        return self._request("DELETE", path, **kwargs)
+
     def _request(self, method: str, path: str, **kwargs: Any) -> ApiOk | ApiError:
         """Run an HTTP request, converting transport errors to typed results.
 
@@ -184,6 +188,18 @@ class ApiClient:
         any conversation history.
         """
         return self._post("/query", json={"question": question})
+
+    def delete_document(self, document_id: str) -> ApiOk | ApiError:
+        """Delete a document via ``DELETE /documents/{document_id}``.
+
+        The backend returns a JSON object body (HTTP 200) on success, so
+        ``ApiOk.payload`` holds ``{document_id, status, message}``. Errors reuse
+        the shared handling: a backend ``{error, detail}`` envelope -> an
+        ``ApiError`` with that code (e.g. ``DOCUMENT_NOT_FOUND`` for a 404), and
+        transport failures -> ``CONNECTION_ERROR`` / ``TIMEOUT`` /
+        ``UNEXPECTED_RESPONSE``.
+        """
+        return self._delete(f"/documents/{document_id}")
 
 
 # ---------------------------------------------------------------------------

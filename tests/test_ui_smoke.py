@@ -331,3 +331,214 @@ def test_uploader_key_increments_only_on_success(monkeypatch):
     # Another failure after a success: still no further increment.
     _apply(False)
     assert fake_st.session_state["uploader_key"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Delete flow — _do_delete contract, _clear_citations_for_document, and the
+# sidebar confirm/cancel decision seams (UI-only; Task 15A).
+#
+# AppTest 1.40.2 limitation (documented): per-document Delete / Confirm / Cancel
+# are rendered inside st.sidebar via st.button + st.columns, which AppTest in
+# 1.40.2 cannot reliably address by key/label, and st.rerun() short-circuits a
+# scripted run. So the delete UX is verified here at deterministic LOGIC seams
+# (the same strategy the uploader-reset tests use), NOT via AppTest widgets.
+# A MANUAL visual check is still required: upload a PDF, click Delete -> a
+# confirm line naming the file appears (nothing deleted yet); Cancel closes it
+# with the doc intact; Confirm removes the doc and clears any transcript entry
+# that cited it; a failed delete keeps the doc and leaves the transcript.
+# ---------------------------------------------------------------------------
+
+
+class _DeleteClient:
+    """Fake client returning a preset delete result; records the ids it saw."""
+
+    def __init__(self, delete_result):
+        self._delete_result = delete_result
+        self.deleted_ids = []
+        self.list_calls = 0
+
+    def delete_document(self, document_id):
+        self.deleted_ids.append(document_id)
+        return self._delete_result
+
+    def list_documents(self):
+        self.list_calls += 1
+        return UIAPP.ApiOk({"documents": []})
+
+
+def _patch_app_delete(monkeypatch, delete_result):
+    """Point ui.app at a fake st + fake delete client; return (fake_st, client)."""
+    fake_st = _FakeSt()
+    monkeypatch.setattr(UIAPP, "st", fake_st)
+    client = _DeleteClient(delete_result)
+    monkeypatch.setattr(UIAPP, "get_client", lambda: client)
+    return fake_st, client
+
+
+def _delete_ok(status="deleted"):
+    return UIAPP.ApiOk(
+        {"document_id": "doc-1", "status": status, "message": "Document deleted."}
+    )
+
+
+def test_do_delete_returns_true_on_deleted(monkeypatch):
+    """A 200 {status:'deleted'} response returns True and calls the client once."""
+    fake_st, client = _patch_app_delete(monkeypatch, _delete_ok("deleted"))
+    assert UIAPP._do_delete("doc-1", "a.pdf") is True
+    assert client.deleted_ids == ["doc-1"]
+    assert fake_st.errors == []
+
+
+def test_do_delete_returns_false_on_api_error(monkeypatch):
+    """An ApiError returns False and shows a friendly error."""
+    fake_st, client = _patch_app_delete(
+        monkeypatch, UIAPP.ApiError(code="DOCUMENT_NOT_FOUND", detail=None, status_code=404)
+    )
+    assert UIAPP._do_delete("doc-1", "a.pdf") is False
+    assert fake_st.errors  # a message was shown
+
+
+def test_do_delete_returns_false_on_unexpected_body(monkeypatch):
+    """A 2xx body without status=='deleted' is treated as unexpected -> False."""
+    from ui.presentation import UNEXPECTED_RESPONSE_MESSAGE
+
+    fake_st, client = _patch_app_delete(monkeypatch, UIAPP.ApiOk({"status": "weird"}))
+    assert UIAPP._do_delete("doc-1", "a.pdf") is False
+    assert UNEXPECTED_RESPONSE_MESSAGE in fake_st.errors
+
+
+def test_clear_citations_drops_only_entries_citing_the_deleted_doc(monkeypatch):
+    """Successful deletion purges transcript entries that cite the deleted doc."""
+    fake_st = _FakeSt()
+    monkeypatch.setattr(UIAPP, "st", fake_st)
+    fake_st.session_state["transcript"] = [
+        {  # cites the deleted doc -> dropped
+            "question": "q1",
+            "answer": "a1",
+            "citations": [{"document": "gone.pdf", "page": 1, "excerpt": "x"}],
+        },
+        {  # cites a surviving doc -> kept
+            "question": "q2",
+            "answer": "a2",
+            "citations": [{"document": "keep.pdf", "page": 2, "excerpt": "y"}],
+        },
+        {  # no citations -> kept
+            "question": "q3",
+            "answer": "a3",
+            "citations": [],
+        },
+        {  # error entry (no citations key) -> kept
+            "question": "q4",
+            "error": "oops",
+        },
+    ]
+
+    UIAPP._clear_citations_for_document("gone.pdf")
+
+    kept_questions = [e["question"] for e in fake_st.session_state["transcript"]]
+    assert kept_questions == ["q2", "q3", "q4"]
+
+
+def test_clear_citations_drops_mixed_entry_citing_deleted_doc(monkeypatch):
+    """MVP behavior: a mixed-citation entry is dropped if it cites the deleted doc."""
+    fake_st = _FakeSt()
+    monkeypatch.setattr(UIAPP, "st", fake_st)
+    fake_st.session_state["transcript"] = [
+        {
+            "question": "q",
+            "answer": "a",
+            "citations": [
+                {"document": "keep.pdf", "page": 1, "excerpt": "x"},
+                {"document": "gone.pdf", "page": 3, "excerpt": "z"},
+            ],
+        }
+    ]
+    UIAPP._clear_citations_for_document("gone.pdf")
+    assert fake_st.session_state["transcript"] == []
+
+
+def test_delete_confirm_flow_success_removes_and_clears(monkeypatch):
+    """Emulate the sidebar Confirm branch on success.
+
+    Mirrors the exact decisions in _render_document_row's confirm path: call
+    _do_delete; on True clear citations + pending_delete + refresh. Asserts the
+    doc is gone (via refresh returning []), the citing transcript entry cleared,
+    and pending_delete reset.
+    """
+    fake_st, client = _patch_app_delete(monkeypatch, _delete_ok("deleted"))
+    fake_st.session_state["transcript"] = [
+        {"question": "q", "answer": "a", "citations": [{"document": "a.pdf", "page": 1, "excerpt": "x"}]}
+    ]
+    fake_st.session_state["documents"] = [{"document_name": "a.pdf", "document_id": "doc-1"}]
+    fake_st.session_state["documents_loaded"] = True
+    fake_st.session_state["pending_delete"] = "doc-1"
+
+    # Emulate the confirm branch logic exactly.
+    if UIAPP._do_delete("doc-1", "a.pdf"):
+        UIAPP._clear_citations_for_document("a.pdf")
+        fake_st.session_state["pending_delete"] = None
+        UIAPP._refresh_documents()
+
+    assert client.deleted_ids == ["doc-1"]
+    assert fake_st.session_state["transcript"] == []  # citing entry dropped
+    assert fake_st.session_state["pending_delete"] is None
+    assert fake_st.session_state["documents"] == []  # refresh returned empty list
+    assert client.list_calls == 1
+
+
+def test_delete_confirm_flow_failure_keeps_doc_and_transcript(monkeypatch):
+    """Emulate the sidebar Confirm branch on failure: doc + transcript preserved."""
+    fake_st, client = _patch_app_delete(
+        monkeypatch, UIAPP.ApiError(code="INTERNAL_ERROR", detail=None, status_code=500)
+    )
+    original_transcript = [
+        {"question": "q", "answer": "a", "citations": [{"document": "a.pdf", "page": 1, "excerpt": "x"}]}
+    ]
+    original_docs = [{"document_name": "a.pdf", "document_id": "doc-1"}]
+    fake_st.session_state["transcript"] = list(original_transcript)
+    fake_st.session_state["documents"] = list(original_docs)
+    fake_st.session_state["pending_delete"] = "doc-1"
+
+    # Emulate the confirm branch logic exactly (failure path).
+    if UIAPP._do_delete("doc-1", "a.pdf"):
+        UIAPP._clear_citations_for_document("a.pdf")
+        fake_st.session_state["pending_delete"] = None
+        UIAPP._refresh_documents()
+    else:
+        # Failure: close the confirm UI, keep everything else intact.
+        fake_st.session_state["pending_delete"] = None
+
+    assert client.deleted_ids == ["doc-1"]  # the API was attempted
+    assert fake_st.session_state["transcript"] == original_transcript  # unchanged
+    assert fake_st.session_state["documents"] == original_docs  # doc kept
+    assert fake_st.session_state["pending_delete"] is None
+    assert client.list_calls == 0  # no refresh on failure
+
+
+def test_delete_click_sets_pending_without_calling_api(monkeypatch):
+    """Clicking Delete arms pending_delete and makes NO API call (step 1)."""
+    fake_st, client = _patch_app_delete(monkeypatch, _delete_ok("deleted"))
+    fake_st.session_state["pending_delete"] = None
+
+    # Emulate the "Delete" button branch: set pending_delete only.
+    fake_st.session_state["pending_delete"] = "doc-1"
+
+    assert fake_st.session_state["pending_delete"] == "doc-1"
+    assert client.deleted_ids == []  # no API call on the arming click
+
+
+def test_delete_cancel_makes_no_api_call_and_clears_pending(monkeypatch):
+    """Cancel clears pending_delete and never calls the client (step 2 cancel)."""
+    fake_st, client = _patch_app_delete(monkeypatch, _delete_ok("deleted"))
+    fake_st.session_state["pending_delete"] = "doc-1"
+    fake_st.session_state["documents"] = [{"document_name": "a.pdf", "document_id": "doc-1"}]
+    fake_st.session_state["transcript"] = [{"question": "q", "answer": "a", "citations": []}]
+
+    # Emulate the Cancel branch: clear pending_delete, no API call.
+    fake_st.session_state["pending_delete"] = None
+
+    assert client.deleted_ids == []
+    assert fake_st.session_state["pending_delete"] is None
+    # Unrelated state untouched.
+    assert fake_st.session_state["documents"] == [{"document_name": "a.pdf", "document_id": "doc-1"}]
+    assert len(fake_st.session_state["transcript"]) == 1

@@ -80,6 +80,7 @@ from src.llm.gemini_provider import GeminiLLMProvider
 from src.models import (
     Chunk,
     Citation,
+    DeleteResponse,
     DocumentRecord,
     QueryResponse,
     ReembedResponse,
@@ -197,13 +198,18 @@ class _FakeIngestionService:
         ingest_error: Exception | None = None,
         reembed_result: ReembedResponse | None = None,
         reembed_error: Exception | None = None,
+        delete_result: "DeleteResponse | None" = None,
+        delete_error: Exception | None = None,
     ) -> None:
         self._ingest_result = ingest_result
         self._ingest_error = ingest_error
         self._reembed_result = reembed_result
         self._reembed_error = reembed_error
+        self._delete_result = delete_result
+        self._delete_error = delete_error
         self.ingest_called = False
         self.last_ingest_args: tuple[bytes, str] | None = None
+        self.deleted_ids: list[str] = []
 
     def ingest(self, data: bytes, filename: str) -> UploadResponse:
         self.ingest_called = True
@@ -218,6 +224,13 @@ class _FakeIngestionService:
             raise self._reembed_error
         assert self._reembed_result is not None
         return self._reembed_result
+
+    def delete_document(self, document_id: str):
+        self.deleted_ids.append(document_id)
+        if self._delete_error is not None:
+            raise self._delete_error
+        assert self._delete_result is not None
+        return self._delete_result
 
 
 class _FakeQueryService:
@@ -279,6 +292,14 @@ def _reembed_response() -> ReembedResponse:
         embedding_provider="sentence-transformers",
         embedding_model="all-MiniLM-L6-v2",
         chunk_count=5,
+    )
+
+
+def _delete_response(document_id: str = "doc-123") -> DeleteResponse:
+    return DeleteResponse(
+        document_id=document_id,
+        status="deleted",
+        message="Document deleted.",
     )
 
 
@@ -421,6 +442,60 @@ def test_reembed_success_returns_200() -> None:
     body = resp.json()
     assert body["document_id"] == "doc-123"
     assert body["status"] == "reembedded"
+
+
+def test_delete_success_returns_200_with_deleted_status() -> None:
+    """A successful delete returns 200 with {document_id, status:'deleted', message}."""
+    fake = _FakeIngestionService(delete_result=_delete_response("doc-123"))
+    client = _client_with_overrides(ingestion=lambda: fake)
+
+    resp = client.delete("/documents/doc-123")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "document_id": "doc-123",
+        "status": "deleted",
+        "message": "Document deleted.",
+    }
+
+
+def test_delete_calls_service_with_path_document_id() -> None:
+    """The DELETE route forwards the path document_id to the service unchanged."""
+    fake = _FakeIngestionService(delete_result=_delete_response("doc-xyz"))
+    client = _client_with_overrides(ingestion=lambda: fake)
+
+    client.delete("/documents/doc-xyz")
+
+    assert fake.deleted_ids == ["doc-xyz"]
+
+
+def test_delete_unknown_id_returns_404_document_not_found() -> None:
+    """An unknown document_id maps to 404 DOCUMENT_NOT_FOUND (existing handler)."""
+    fake = _FakeIngestionService(delete_error=DocumentNotFoundError("nope"))
+    client = _client_with_overrides(ingestion=lambda: fake)
+
+    resp = client.delete("/documents/nope")
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "DOCUMENT_NOT_FOUND"
+
+
+def test_delete_unexpected_failure_returns_500_internal_error() -> None:
+    """A generic storage failure maps to 500 INTERNAL_ERROR via the catch-all."""
+    secret_text = "chroma internal /path leak secret"
+    fake = _FakeIngestionService(delete_error=RuntimeError(secret_text))
+    app = create_app()
+    app.dependency_overrides[ingestion_service_dep] = lambda: fake
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.delete("/documents/doc-123")
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error"] == "INTERNAL_ERROR"
+    assert body["detail"] == "An unexpected error occurred."
+    assert secret_text not in resp.text
 
 
 def test_list_documents_populated() -> None:

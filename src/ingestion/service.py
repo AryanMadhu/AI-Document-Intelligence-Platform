@@ -49,7 +49,7 @@ from src.embeddings.base import (
 )
 from src.ingestion.chunking import Chunking_Module
 from src.ingestion.pdf_parser import PDF_Parser, PDFParseError  # noqa: F401 (re-export via package)
-from src.models import ReembedResponse, UploadResponse
+from src.models import DeleteResponse, ReembedResponse, UploadResponse
 from src.vectorstore import VectorStore
 
 
@@ -421,6 +421,54 @@ class Ingestion_Service:
             embedding_provider=record.embedding_provider,
             embedding_model=record.embedding_model,
             chunk_count=record.chunk_count,
+        )
+
+    def delete_document(self, document_id: str) -> DeleteResponse:
+        """Delete a stored document by its stable ``document_id``.
+
+        Orchestration order (chosen so a failure can never falsely report
+        success or corrupt the store):
+
+        1. **Existence check first.** Load the document's chunks via
+           :meth:`VectorStore.get_document_chunks`. If none exist the id is
+           unknown, so :class:`DocumentNotFoundError` is raised and the store is
+           left completely unchanged (nothing is deleted).
+        2. **Delegate the delete.** Call :meth:`VectorStore.delete_document`,
+           which removes every chunk carrying this ``document_id`` (addressed by
+           ``document_id``, never ``document_hash``) and post-verifies the
+           removal. Any storage failure PROPAGATES unchanged — it is never
+           swallowed — so a failed delete surfaces as an error rather than a
+           false ``"deleted"`` response.
+        3. **Return.** On success return a :class:`~src.models.DeleteResponse`
+           echoing the id with ``status="deleted"``.
+
+        Args:
+            document_id: The stable id of the stored document to delete.
+
+        Returns:
+            A :class:`~src.models.DeleteResponse` with ``status="deleted"`` and a
+            human-readable message.
+
+        Raises:
+            DocumentNotFoundError: If no stored chunks carry ``document_id``; the
+                store is left unchanged.
+            RuntimeError: If the store's post-delete verification finds residual
+                chunks (a partial/failed delete). Propagated from the store so a
+                storage failure is never reported as success.
+        """
+        # 1. Existence check first. No chunks => unknown id (store untouched).
+        chunks = self._vector_store.get_document_chunks(document_id)
+        if not chunks:
+            raise DocumentNotFoundError(document_id)
+
+        # 2. Delegate; a storage failure propagates (no false success).
+        self._vector_store.delete_document(document_id)
+
+        # 3. RETURN.
+        return DeleteResponse(
+            document_id=document_id,
+            status="deleted",
+            message="Document deleted.",
         )
 
     def _find_existing_record(self, document_hash: str):

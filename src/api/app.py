@@ -70,6 +70,7 @@ from src.llm.base import (
     build_llm_provider,
 )
 from src.models import (
+    DeleteResponse,
     DocumentListResponse,
     ErrorResponse,
     QueryRequest,
@@ -584,6 +585,26 @@ def create_app() -> FastAPI:
     ) -> ReembedResponse:
         """Re-embed a stored document addressed by its stable ``document_id``."""
         return service.reembed_document(document_id)
+
+    @app.delete(
+        "/documents/{document_id}",
+        response_model=DeleteResponse,
+        status_code=status.HTTP_200_OK,
+    )
+    async def delete_document(
+        document_id: str,
+        service: Ingestion_Service = Depends(ingestion_service_dep),
+    ) -> DeleteResponse:
+        """Delete a stored document addressed by its stable ``document_id``.
+
+        Returns HTTP 200 with a :class:`~src.models.DeleteResponse` JSON object
+        (never a 204 empty body) so the UI client can parse the outcome. An
+        unknown ``document_id`` raises ``DocumentNotFoundError`` -> the existing
+        404 ``DOCUMENT_NOT_FOUND`` handler; an unexpected storage failure bubbles
+        to the existing catch-all 500 ``INTERNAL_ERROR`` handler. No new handler
+        is needed.
+        """
+        return service.delete_document(document_id)
 
     return app
 

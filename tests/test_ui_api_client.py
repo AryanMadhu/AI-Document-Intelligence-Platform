@@ -184,6 +184,50 @@ class TestQuery:
 
 
 # ---------------------------------------------------------------------------
+# delete_document
+# ---------------------------------------------------------------------------
+class TestDelete:
+    def test_delete_success(self):
+        body = {
+            "document_id": "doc-1",
+            "status": "deleted",
+            "message": "Document deleted.",
+        }
+        session = FakeSession(FakeResponse(200, body))
+        result = _client_with_session(session).delete_document("doc-1")
+        assert isinstance(result, AC.ApiOk)
+        assert result.payload["status"] == "deleted"
+        assert result.payload["document_id"] == "doc-1"
+
+    def test_delete_uses_delete_method_and_path(self):
+        session = FakeSession(
+            FakeResponse(200, {"document_id": "abc", "status": "deleted", "message": "ok"})
+        )
+        client = _client_with_session(session)
+        client.delete_document("abc")
+        call = session.last_call
+        assert call["method"] == "DELETE"
+        assert call["url"].endswith("/documents/abc")
+        assert call["timeout"] == (5, 60)
+
+    def test_delete_404_document_not_found(self):
+        body = {"error": "DOCUMENT_NOT_FOUND", "detail": "No document found with the given id."}
+        session = FakeSession(FakeResponse(404, body))
+        result = _client_with_session(session).delete_document("missing")
+        assert isinstance(result, AC.ApiError)
+        assert result.code == "DOCUMENT_NOT_FOUND"
+        assert result.status_code == 404
+
+    def test_delete_500_server_error(self):
+        body = {"error": "INTERNAL_ERROR", "detail": "An unexpected error occurred."}
+        session = FakeSession(FakeResponse(500, body))
+        result = _client_with_session(session).delete_document("doc-1")
+        assert isinstance(result, AC.ApiError)
+        assert result.code == "INTERNAL_ERROR"
+        assert result.status_code == 500
+
+
+# ---------------------------------------------------------------------------
 # transport errors + malformed bodies
 # ---------------------------------------------------------------------------
 class TestTransport:

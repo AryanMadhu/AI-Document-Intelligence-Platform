@@ -244,6 +244,25 @@ class ReembedResponse(BaseModel):
     chunk_count: int
 
 
+class DeleteResponse(BaseModel):
+    """Response body for ``DELETE /documents/{document_id}``.
+
+    Returned (HTTP 200, a JSON object — never a 204 empty body) when a stored
+    document is deleted by its stable ``document_id``. A JSON object body is
+    required so the UI client, which treats a non-JSON/non-dict 2xx body as an
+    unexpected response, can parse the outcome.
+
+    Attributes:
+        document_id: The stable id of the deleted document (echoed back).
+        status: Always ``'deleted'`` on success.
+        message: Human-readable status message.
+    """
+
+    document_id: str
+    status: str
+    message: str
+
+
 class ErrorResponse(BaseModel):
     """Standard error body returned by the API (R16).
 
